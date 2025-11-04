@@ -64,7 +64,7 @@ def draw(image, labels, boxes, scores, thrh=0.5):
         box = list(map(int, box))
 
         # 画边框
-        draw.rectangle(box, outline=color, width=3)
+        draw.rectangle(box, outline=color, width=15)
 
         # 添加标签和置信度
         text = f"{label_map[category]} {scores[j].item():.2f}"
@@ -147,9 +147,18 @@ def process_video(model, file_path, size=(640, 640)):
     out.release()
     print("Video processing complete. Result saved as 'results_video.mp4'.")
 
+
 def process_dataset(model, dataset_path, output_path, thrh=0.5, size=(640, 640)):
     os.makedirs(output_path, exist_ok=True)
-    image_paths = [os.path.join(dataset_path, f) for f in os.listdir(dataset_path) if f.endswith(('.jpg', '.png'))]
+    result_path = os.path.join(output_path, "results_txt")
+    os.makedirs(result_path, exist_ok=True)
+
+    # 创建 results_img 文件夹
+    img_output_path = os.path.join(output_path, "results_img")
+    os.makedirs(img_output_path, exist_ok=True)
+
+    image_paths = [os.path.join(dataset_path, f) for f in os.listdir(dataset_path) if
+                   f.endswith(('.jpg', '.png', '.JPG'))]
 
     transforms = T.Compose([
         T.Resize(size),
@@ -162,20 +171,49 @@ def process_dataset(model, dataset_path, output_path, thrh=0.5, size=(640, 640))
         w, h = im_pil.size
         orig_size = torch.tensor([[w, h]]).cuda()
 
-        # 图像预处理
+        # 推理
         im_data = transforms(im_pil).unsqueeze(0).cuda()
         output = model(im_data, orig_size)
         labels, boxes, scores = output[0]['labels'], output[0]['boxes'], output[0]['scores']
 
-        # 绘制结果
+        # 绘制并保存可视化图到 results_img 文件夹
         vis_image = draw(im_pil.copy(), labels, boxes, scores, thrh)
-        save_path = os.path.join(output_path, f"vis_{os.path.basename(file_path)}")
+        # 修改保存路径到 results_img 文件夹
+        save_path = os.path.join(img_output_path, f"vis_{os.path.basename(file_path)}")
         vis_image.save(save_path)
+
+        # ====== ⬇️ 保存为标准的 YOLO 格式 ======
+        txt_name = os.path.splitext(os.path.basename(file_path))[0] + ".txt"
+        txt_path = os.path.join(result_path, txt_name)
+        with open(txt_path, "w") as f:
+            for i in range(len(scores)):
+                if scores[i] < thrh:
+                    continue
+                cls_id = labels[i].item()  # 类别ID
+                box = boxes[i].tolist()  # [x_min, y_min, x_max, y_max]
+
+                # 转换为 YOLO 格式（归一化的中心坐标和宽高）
+                x_min, y_min, x_max, y_max = box
+                x_center = (x_min + x_max) / 2 / w
+                y_center = (y_min + y_max) / 2 / h
+                width = (x_max - x_min) / w
+                height = (y_max - y_min) / h
+
+                # 确保坐标在 [0,1] 范围内
+                x_center = max(0, min(1, x_center))
+                y_center = max(0, min(1, y_center))
+                width = max(0, min(1, width))
+                height = max(0, min(1, height))
+
+                # 标准 YOLO 格式：class_id x_center y_center width height
+                f.write(f"{cls_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
+        # ====== ⬆️ YOLO 格式保存完成 ======
 
         if idx % 500 == 0:
             print(f"Processed {idx}/{len(image_paths)} images...")
 
-    print("Visualization complete. Results saved in:", output_path)
+    print("Visualization and label saving complete.")
+    print(f"Results saved in:\n  {img_output_path}\n  {result_path}")
 
 
 def main(args):

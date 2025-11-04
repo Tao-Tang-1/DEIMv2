@@ -1,70 +1,69 @@
 __include__: [
-  '../dataset/coco_detection.yml',
+  '../dataset/custom_detection.yml',
   '../runtime.yml',
   '../base/dataloader.yml',
   '../base/optimizer.yml',
   '../base/deimv2.yml',
 ]
 
-output_dir: ./outputs/deimv2_dinov3_s_coco
 
+output_dir: ./outputs/deimv2_dinov3_x_wheat3
+  
 DEIM:
   backbone: DINOv3STAs
 
 DINOv3STAs:
-  name: vit_tiny
-  embed_dim: 192
-  weights_path: ./ckpts/vitt_distill.pt
+  name: dinov3_vits16plus
+  weights_path: ./ckpts/9999_teacher_backbone.pth
   interaction_indexes: [5,8,11]   # only need the [1/8, 1/16, 1/32]
-  num_heads: 3
-
+  finetune: True
+  conv_inplane: 64
+  hidden_dim: 256
+  
 HybridEncoder:
-  in_channels: [192, 192, 192]
-  depth_mult: 0.67
-  expansion: 0.34
-  hidden_dim: 192
-  dim_feedforward: 512
+  in_channels: [256, 256, 256]
+  # intra
+  hidden_dim: 256
+  dim_feedforward: 1024
+
+  # cross 
+  expansion: 1.25
+  depth_mult: 1.37
 
 DEIMTransformer:
-  feat_channels: [192, 192, 192]
-  hidden_dim: 192
-  dim_feedforward: 512
-  num_layers: 4  # 4 5 6
-  eval_idx: -1  # -2 -3 -4
+  num_layers: 6
+  eval_idx: -1
+  feat_channels: [256, 256, 256]
+  # reg_scale: 8
+  hidden_dim: 256
+  dim_feedforward: 2048
 
-
-## Optimizer
 optimizer:
   type: AdamW
-
   params: 
     -
       # except norm/bn/bias in self.dinov3
       params: '^(?=.*.dinov3)(?!.*(?:norm|bn|bias)).*$'  
-      lr: 0.000025
+      lr: 0.00001
     -
-      # including all norm/bn/bias in self.dinov3
+      # including norm/bn/bias in self.dinov3
       params: '^(?=.*.dinov3)(?=.*(?:norm|bn|bias)).*$'    
-      lr: 0.000025
+      lr: 0.00001
       weight_decay: 0.
     - 
-      # including all norm/bn/bias except for the self.dinov3
+      # including norm/bn/bias except for the self.dinov3
       params: '^(?=.*(?:sta|encoder|decoder))(?=.*(?:norm|bn|bias)).*$'
       weight_decay: 0.
 
   lr: 0.0005
   betas: [0.9, 0.999]
-  weight_decay: 0.0001
+  weight_decay: 0.000125
 
-# Increase to search for the optimal ema
-epoches: 132 # 120 + 4n
 
-## Our LR-Scheduler
-flat_epoch: 64    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
-no_aug_epoch: 12
+epoches: 120
 
-## Our DataAug
-train_dataloader:
+## Dense O2O: Mosaic + Mixup + CopyBlend
+train_dataloader: 
   dataset: 
     transforms:
       ops:
@@ -81,16 +80,13 @@ train_dataloader:
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
-        epoch: [4, 64, 120]   # list 
+        epoch: [4, 49, 90]   # list
 
   collate_fn:
-    base_size: 640
-    mixup_prob: 0.5
-    ema_restart_decay: 0.9999
-    base_size_repeat: 20
-    mixup_epochs: [4, 64]
-    stop_epoch: 120
-    copyblend_epochs: [4, 120]
+    mixup_epochs: [4, 49]
+    stop_epoch: 90
+    copyblend_epochs: [4, 90]
+    base_size_repeat: 3
 
 val_dataloader:
   dataset:
@@ -99,10 +95,3 @@ val_dataloader:
         - {type: Resize, size: [640, 640], }
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
-
-DEIMCriterion:
-  matcher:
-    # change matcher
-    change_matcher: True
-    iou_order_alpha: 4.0
-    matcher_change_epoch: 100

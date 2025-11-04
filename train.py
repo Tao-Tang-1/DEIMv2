@@ -43,6 +43,10 @@ def main(args, ) -> None:
 
     cfg = YAMLConfig(args.config, **update_dict)
 
+    if cfg.num_workers == 0:
+        cfg.num_workers = cfg.yaml_cfg.get('train_dataloader', {}).get('num_workers', 0)
+        print(f"Setting num_workers from yaml config: {cfg.num_workers}")
+
     if args.resume or args.tuning:
         if 'HGNetv2' in cfg.yaml_cfg:
             cfg.yaml_cfg['HGNetv2']['pretrained'] = False

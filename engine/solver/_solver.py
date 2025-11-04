@@ -151,14 +151,27 @@ class BaseSolver(object):
                 else:
                     print(f'Not load {k}.state_dict')
 
-    def load_resume_state(self, path: str):
-        """Load resume"""
+    # def load_resume_state(self, path: str):
+    #     """Load resume"""
+    #     if path.startswith('http'):
+    #         state = torch.hub.load_state_dict_from_url(path, map_location='cpu')
+    #     else:
+    #         state = torch.load(path, map_location='cpu')
+    #
+    #     # state['model'] = remove_module_prefix(state['model'])
+    #     self.load_state_dict(state)
+    def load_resume_state(self, path: str, reset_epoch=None):
+        """Load resume with optional epoch reset"""
         if path.startswith('http'):
             state = torch.hub.load_state_dict_from_url(path, map_location='cpu')
         else:
             state = torch.load(path, map_location='cpu')
 
-        # state['model'] = remove_module_prefix(state['model'])
+        # 如果指定了reset_epoch，覆盖loaded的last_epoch
+        if reset_epoch is not None:
+            state['last_epoch'] = reset_epoch
+            print(f"Reset last_epoch to {reset_epoch}")
+
         self.load_state_dict(state)
 
     def load_tuning_state(self, path: str):

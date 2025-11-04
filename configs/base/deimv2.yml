@@ -79,7 +79,8 @@ PostProcessor:
 
 
 ## DEIM LR-Scheduler
-epoches: 58 # 72 + 2n  # Increase to search for the optimal ema
+#epoches: 58 # 72 + 2n  # Increase to search for the optimal ema
+#epoches: 120
 
 lrsheduler: flatcosine
 lr_gamma: 0.5
