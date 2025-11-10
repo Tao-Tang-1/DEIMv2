@@ -78,6 +78,10 @@ class DetSolver(BaseSolver):
             if epoch == self.train_dataloader.collate_fn.stop_epoch:
                 self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
                 self.ema.decay = self.train_dataloader.collate_fn.ema_restart_decay
+
+                # ✅ 修复：保持全局 epoch 计数不回退
+                self.last_epoch = epoch
+
                 print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
             train_stats = train_one_epoch(
@@ -103,14 +107,22 @@ class DetSolver(BaseSolver):
 
             self.last_epoch += 1
 
-            # if self.output_dir and epoch < self.train_dataloader.collate_fn.stop_epoch:
-            if self.output_dir and (epoch < self.train_dataloader.collate_fn.stop_epoch or epoch == args.epoches - 1):
+            # if self.output_dir and (epoch < self.train_dataloader.collate_fn.stop_epoch or epoch == args.epoches - 1):
+            if self.output_dir and epoch < self.train_dataloader.collate_fn.stop_epoch:
                 checkpoint_paths = [self.output_dir / 'last.pth']
                 # extra checkpoint before LR drop and every 100 epochs
                 if (epoch + 1) % args.checkpoint_freq == 0:
                     checkpoint_paths.append(self.output_dir / f'checkpoint{epoch:04}.pth')
+                # for checkpoint_path in checkpoint_paths:
+                #     dist_utils.save_on_master(self.state_dict(), checkpoint_path)
                 for checkpoint_path in checkpoint_paths:
-                    dist_utils.save_on_master(self.state_dict(), checkpoint_path)
+                    state = self.state_dict()
+                    state["last_epoch"] = epoch  # 👈 强制覆盖当前轮数
+                    # print(f"💾 Saving checkpoint at epoch={epoch}, last_epoch={self.last_epoch}")
+                    dist_utils.save_on_master(state, checkpoint_path)
+            # 新增逻辑：在训练完全结束后，再保存一次最终模型
+            if self.output_dir and epoch == args.epoches - 1:
+                dist_utils.save_on_master(self.state_dict(), self.output_dir / 'final.pth')
 
             module = self.ema.module if self.ema else self.model
             test_stats, coco_evaluator = evaluate(
@@ -155,11 +167,11 @@ class DetSolver(BaseSolver):
                         top1 = max(test_stats[k][0], top1)
                         dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
 
-                elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                    best_stat = {'epoch': -1, }
-                    self.ema.decay -= 0.0001
-                    self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
-                    print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
+                # elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
+                #     best_stat = {'epoch': -1, }
+                #     self.ema.decay -= 0.0001
+                #     self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
+                #     print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
 
             log_stats = {

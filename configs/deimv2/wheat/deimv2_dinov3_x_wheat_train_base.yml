@@ -7,14 +7,14 @@ __include__: [
 ]
 
 
-output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train1
+output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train_base
   
 DEIM:
   backbone: DINOv3STAs
 
 DINOv3STAs:
   name: dinov3_vits16plus
-  weights_path: ./ckpts/19999_teacher_backbone.pth
+  weights_path: ./ckpts/dinov3_vits16plus_pretrain_lvd1689m-4057cbaa.pth
   interaction_indexes: [5,8,11]   # only need the [1/8, 1/16, 1/32]
   finetune: True
   conv_inplane: 64
@@ -60,7 +60,7 @@ optimizer:
   weight_decay: 0.000125
 
 
-epoches: 120
+epoches: 78
 
 ## Dense O2O: Mosaic + Mixup + CopyBlend
 train_dataloader: 
@@ -80,12 +80,12 @@ train_dataloader:
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
-        epoch: [4, 64, 120]   # list
+        epoch: [4, 29, 50]   # list
 
   collate_fn:
-    mixup_epochs: [4, 64]
-    stop_epoch: 100
-    copyblend_epochs: [4, 120]
+    mixup_epochs: [4, 29]
+    stop_epoch: 50
+    copyblend_epochs: [4, 50]
     base_size_repeat: 3
 
 val_dataloader:
