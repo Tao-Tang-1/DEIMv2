@@ -105,7 +105,8 @@ class DetSolver(BaseSolver):
                 if self.lr_warmup_scheduler is None or self.lr_warmup_scheduler.finished():
                     self.lr_scheduler.step()
 
-            self.last_epoch += 1
+            # self.last_epoch += 1
+            self.last_epoch = epoch
 
             # if self.output_dir and (epoch < self.train_dataloader.collate_fn.stop_epoch or epoch == args.epoches - 1):
             if self.output_dir and epoch < self.train_dataloader.collate_fn.stop_epoch:
@@ -113,13 +114,13 @@ class DetSolver(BaseSolver):
                 # extra checkpoint before LR drop and every 100 epochs
                 if (epoch + 1) % args.checkpoint_freq == 0:
                     checkpoint_paths.append(self.output_dir / f'checkpoint{epoch:04}.pth')
-                # for checkpoint_path in checkpoint_paths:
-                #     dist_utils.save_on_master(self.state_dict(), checkpoint_path)
                 for checkpoint_path in checkpoint_paths:
-                    state = self.state_dict()
-                    state["last_epoch"] = epoch  # 👈 强制覆盖当前轮数
+                    dist_utils.save_on_master(self.state_dict(), checkpoint_path)
+                # for checkpoint_path in checkpoint_paths:
+                #     state = self.state_dict()
+                #     state["last_epoch"] = epoch  # 👈 强制覆盖当前轮数
                     # print(f"💾 Saving checkpoint at epoch={epoch}, last_epoch={self.last_epoch}")
-                    dist_utils.save_on_master(state, checkpoint_path)
+                    # dist_utils.save_on_master(state, checkpoint_path)
             # 新增逻辑：在训练完全结束后，再保存一次最终模型
             if self.output_dir and epoch == args.epoches - 1:
                 dist_utils.save_on_master(self.state_dict(), self.output_dir / 'final.pth')

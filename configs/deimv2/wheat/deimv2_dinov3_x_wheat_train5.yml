@@ -7,7 +7,7 @@ __include__: [
 ]
 
 
-output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train4
+output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train5
   
 DEIM:
   backbone: DINOv3STAs
@@ -15,7 +15,7 @@ DEIM:
 DINOv3STAs:
   name: dinov3_vits16plus
   weights_path: ./ckpts/dinov3_vits16plus_pretrain_lvd1689m-4057cbaa.pth
-  interaction_indexes: [3,7,11]   # only need the [1/8, 1/16, 1/32]
+  interaction_indexes: [2,6,10]   # only need the [1/8, 1/16, 1/32]
   finetune: True
   conv_inplane: 64
   hidden_dim: 256

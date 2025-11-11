@@ -1,6 +1,6 @@
 import torch
 
-ckpt_path = "/tangquan/code/DEIMv2/outputs/wheat_train/deimv2_dinov3_x_wheat_train_base/best_stg2.pth"
+ckpt_path = "/tangquan/code/DEIMv2/outputs/wheat_train/deimv2_dinov3_x_wheat_train5/last.pth"
 ckpt = torch.load(ckpt_path, map_location="cpu",weights_only=False)
 
 print("🔍 Checkpoint 键列表:")
