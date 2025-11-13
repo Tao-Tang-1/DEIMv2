@@ -35,14 +35,53 @@ class SpatialPriorModulev2(nn.Module):
                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
             ]
         )
+        # # 1/8
+        # self.conv2 = nn.Sequential(
+        #     *[
+        #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+        #         nn.SyncBatchNorm(2 * inplanes),
+        #     ]
+        # )
+        # # 1/16
+        # self.conv3 = nn.Sequential(
+        #     *[
+        #         nn.GELU(),
+        #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+        #         nn.SyncBatchNorm(4 * inplanes),
+        #     ]
+        # )
         # 1/8
+        # self.conv2 = nn.Sequential(
+        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+        #     nn.SyncBatchNorm(2 * inplanes),
+        # )
+
+        ########train6
+        # 1/8
+        # self.conv2 = nn.Sequential(
+        #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+        #     # Depthwise conv
+        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+        #     nn.SyncBatchNorm(2 * inplanes),
+        # )
+
+        # 1/16
+        # self.conv3 = nn.Sequential(
+        #     nn.GELU(),
+        #     nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+        #     nn.SyncBatchNorm(4 * inplanes),
+        # )
+        ########train6
+
+        ########train7
         self.conv2 = nn.Sequential(
             *[
-                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(2 * inplanes),
+            nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+            # Depthwise conv
+            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+            nn.SyncBatchNorm(2 * inplanes),
             ]
         )
-        # 1/16
         self.conv3 = nn.Sequential(
             *[
                 nn.GELU(),
@@ -50,6 +89,7 @@ class SpatialPriorModulev2(nn.Module):
                 nn.SyncBatchNorm(4 * inplanes),
             ]
         )
+        ########train7
         # 1/32
         self.conv4 = nn.Sequential(
             *[
