@@ -50,46 +50,6 @@ class SpatialPriorModulev2(nn.Module):
                 nn.SyncBatchNorm(4 * inplanes),
             ]
         )
-        # 1/8
-        # self.conv2 = nn.Sequential(
-        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
-        #     nn.SyncBatchNorm(2 * inplanes),
-        # )
-
-        ########train6
-        ## 1/8
-        # self.conv2 = nn.Sequential(
-        #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-        #     # Depthwise conv
-        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-        #     nn.SyncBatchNorm(2 * inplanes),
-        # )
-        #
-        # # 1/16
-        # self.conv3 = nn.Sequential(
-        #     nn.GELU(),
-        #     nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
-        #     nn.SyncBatchNorm(4 * inplanes),
-        # )
-        ########train6
-
-        ########train7
-        # self.conv2 = nn.Sequential(
-        #     *[
-        #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-        #     # Depthwise conv
-        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-        #     nn.SyncBatchNorm(2 * inplanes),
-        #     ]
-        # )
-        # self.conv3 = nn.Sequential(
-        #     *[
-        #         nn.GELU(),
-        #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-        #         nn.SyncBatchNorm(4 * inplanes),
-        #     ]
-        # )
-        ########train7
         # 1/32
         self.conv4 = nn.Sequential(
             *[
@@ -174,38 +134,30 @@ class DINOv3STAs(nn.Module):
         sem_chs = [embed_dim, embed_dim, embed_dim]
         det_chs = [conv_inplane * 2, conv_inplane * 4, conv_inplane * 4]
 
-        self.sem_to_det = nn.ModuleList()
+        # single-direction fusion: detail -> semantic (more stable)
         self.det_to_sem = nn.ModuleList()
-        self.detail_gates = nn.ModuleList()
         self.sem_gates = nn.ModuleList()
         self.post_fuse_reduce = nn.ModuleList()
 
         for s_ch, d_ch in zip(sem_chs, det_chs):
-            # projection sem -> det (1x1) so sem_feat can be mixed into detail space
-            self.sem_to_det.append(nn.Conv2d(s_ch, d_ch, kernel_size=1, bias=False))
-            # projection det -> sem (1x1) optionally (not strictly necessary)
+            # projection det -> sem (1x1)
             self.det_to_sem.append(nn.Conv2d(d_ch, s_ch, kernel_size=1, bias=False))
 
-            self.detail_gates.append(
-                nn.Sequential(
-                    nn.Conv2d(s_ch + d_ch, d_ch, kernel_size=1, bias=False),
-                    nn.SyncBatchNorm(d_ch),
-                    nn.Sigmoid()
-                )
-            )
+            # SE-style gate: cat(sem, det) -> GAP -> small MLP -> sigmoid -> [B, s_ch, 1,1]
+            squeeze_ch = max(1, (s_ch + d_ch) // 4)
             self.sem_gates.append(
                 nn.Sequential(
-                    nn.Conv2d(s_ch + d_ch, s_ch, kernel_size=1, bias=False),
-                    nn.SyncBatchNorm(s_ch),
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Conv2d(s_ch + d_ch, squeeze_ch, kernel_size=1, bias=True),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(squeeze_ch, s_ch, kernel_size=1, bias=True),
                     nn.Sigmoid()
                 )
             )
+
+            # lightweight channel-preserving reduce (1x1 conv, no BN/no activation)
             self.post_fuse_reduce.append(
-                nn.Sequential(
-                    nn.Conv2d(s_ch + d_ch, s_ch + d_ch, kernel_size=1, bias=False),
-                    nn.SyncBatchNorm(s_ch + d_ch),
-                    nn.GELU()
-                )
+                nn.Conv2d(s_ch + d_ch, s_ch + d_ch, kernel_size=1, bias=False)
             )
 
     def forward(self, x):
@@ -244,30 +196,29 @@ class DINOv3STAs(nn.Module):
         # baseline fusion
 
         # Bi-Fusion idea
-        ######train8/train9
+        ######train10
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
             for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
                 # ensure spatial sizes match (they do via your interpolation)
+                # concat for gate computation
                 cat = torch.cat([sem_feat, detail_feat], dim=1)  # [B, s_ch + d_ch, H, W]
 
-                # semantic projected to detail space
-                sem_proj_for_det = self.sem_to_det[i](sem_feat)   # [B, d_ch, H, W]
-                # detail_attn gates detail channels (based on concat)
-                detail_attn = self.detail_gates[i](cat)          # [B, d_ch, H, W] in (0,1)
-                detail_feat = detail_feat + detail_attn * sem_proj_for_det
-
-                # detail projected to sem space
+                # project detail -> semantic
                 det_proj_for_sem = self.det_to_sem[i](detail_feat)  # [B, s_ch, H, W]
-                sem_attn = self.sem_gates[i](cat)                 # [B, s_ch, H, W]
+
+                # SE-style gate -> [B, s_ch, 1, 1]
+                sem_attn = self.sem_gates[i](cat)  # [B, s_ch, 1, 1]
+                # broadcast and apply: only sem updated (single-direction)
                 sem_feat = sem_feat + sem_attn * det_proj_for_sem
 
+                # lightweight reduce (channel-preserving)
                 fused = self.post_fuse_reduce[i](torch.cat([sem_feat, detail_feat], dim=1))
                 fused_feats.append(fused)
         else:
             fused_feats = sem_feats
-        ######train8/train9
+        ######train10
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
