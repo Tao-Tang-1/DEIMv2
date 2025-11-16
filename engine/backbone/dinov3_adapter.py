@@ -164,12 +164,32 @@ class DINOv3STAs(nn.Module):
         #     fused_feats = sem_feats
         # baseline fusion
 
-        ####train12
+        ####train13
+        fused_feats = []
         if self.use_sta:
-            fused_feats = sem_feats
+            detail_feats = self.sta(x)  # returns c2(=1/8), c3(=1/16), c4(=1/32)
+            for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
+                # align spatial sizes (just in case)
+                if detail_feat.shape[-2:] != sem_feat.shape[-2:]:
+                    detail_feat = F.interpolate(detail_feat, size=sem_feat.shape[-2:], mode='bilinear',
+                                                align_corners=False)
+
+                if i == 0:  # fuse only 1/8 (coarsest)
+                    # detach detail to avoid gradient flowing back into STA (原设计)
+                    fused = torch.cat([sem_feat, detail_feat.detach()], dim=1)
+                    fused_feats.append(fused)
+                else:
+                    # NOT fusing: create zero placeholder with same shape as detail_feat
+                    # so the conv in __init__ still receives expected channels (embed_dim + conv_inplane*4)
+                    zeros = torch.zeros(
+                        (sem_feat.shape[0], detail_feat.shape[1], sem_feat.shape[2], sem_feat.shape[3]),
+                        dtype=sem_feat.dtype, device=sem_feat.device
+                    )
+                    fused = torch.cat([sem_feat, zeros], dim=1)
+                    fused_feats.append(fused)
         else:
             fused_feats = sem_feats
-        ####train12
+        ####train13
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
