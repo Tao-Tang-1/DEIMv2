@@ -196,29 +196,36 @@ class DINOv3STAs(nn.Module):
         # baseline fusion
 
         # Bi-Fusion idea
-        ######train10
+        ######train11
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
+
             for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
-                # ensure spatial sizes match (they do via your interpolation)
-                # concat for gate computation
-                cat = torch.cat([sem_feat, detail_feat], dim=1)  # [B, s_ch + d_ch, H, W]
+                # 1. 保证空间大小一致
+                cat = torch.cat([sem_feat, detail_feat], 1)
 
-                # project detail -> semantic
-                det_proj_for_sem = self.det_to_sem[i](detail_feat)  # [B, s_ch, H, W]
+                # 2. detail -> sem 的投影 (语义空间)
+                # ⭐ detach 非常关键：防止 detail 的梯度污染 transformer
+                detail_no_grad = detail_feat.detach()
 
-                # SE-style gate -> [B, s_ch, 1, 1]
-                sem_attn = self.sem_gates[i](cat)  # [B, s_ch, 1, 1]
-                # broadcast and apply: only sem updated (single-direction)
+                det_proj_for_sem = self.det_to_sem[i](detail_no_grad)  # [B, s_ch, H, W]
+
+                # 3. 使用 gate 过滤哪些 detail 信息真的有帮助
+                sem_attn = self.sem_gates[i](torch.cat([sem_feat, detail_no_grad], 1))
+
+                # 4. 只增强 sem（语义）分支
                 sem_feat = sem_feat + sem_attn * det_proj_for_sem
 
-                # lightweight reduce (channel-preserving)
-                fused = self.post_fuse_reduce[i](torch.cat([sem_feat, detail_feat], dim=1))
+                # 5. 输出仍然 concat，但 detail 的梯度仍然存在（用于 backbone 训练）
+                fused = self.post_fuse_reduce[i](
+                    torch.cat([sem_feat, detail_feat], dim=1)
+                )
+
                 fused_feats.append(fused)
         else:
             fused_feats = sem_feats
-        ######train10
+        ######train11
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
