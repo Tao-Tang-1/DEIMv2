@@ -128,37 +128,6 @@ class DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim)
         ])
 
-        # --- Bi-Fusion gates (per-scale) ---
-        # sem_ch: transformer embedding dim (embed_dim)
-        # det_chs: channels from SpatialPriorModulev2 -> [2*conv_inplane, 4*conv_inplane, 4*conv_inplane]
-        sem_chs = [embed_dim, embed_dim, embed_dim]
-        det_chs = [conv_inplane * 2, conv_inplane * 4, conv_inplane * 4]
-
-        # single-direction fusion: detail -> semantic (more stable)
-        self.det_to_sem = nn.ModuleList()
-        self.sem_gates = nn.ModuleList()
-        self.post_fuse_reduce = nn.ModuleList()
-
-        for s_ch, d_ch in zip(sem_chs, det_chs):
-            # projection det -> sem (1x1)
-            self.det_to_sem.append(nn.Conv2d(d_ch, s_ch, kernel_size=1, bias=False))
-
-            # SE-style gate: cat(sem, det) -> GAP -> small MLP -> sigmoid -> [B, s_ch, 1,1]
-            squeeze_ch = max(1, (s_ch + d_ch) // 4)
-            self.sem_gates.append(
-                nn.Sequential(
-                    nn.AdaptiveAvgPool2d(1),
-                    nn.Conv2d(s_ch + d_ch, squeeze_ch, kernel_size=1, bias=True),
-                    nn.ReLU(inplace=True),
-                    nn.Conv2d(squeeze_ch, s_ch, kernel_size=1, bias=True),
-                    nn.Sigmoid()
-                )
-            )
-
-            # lightweight channel-preserving reduce (1x1 conv, no BN/no activation)
-            self.post_fuse_reduce.append(
-                nn.Conv2d(s_ch + d_ch, s_ch + d_ch, kernel_size=1, bias=False)
-            )
 
     def forward(self, x):
         # Code for matching with oss
@@ -195,37 +164,12 @@ class DINOv3STAs(nn.Module):
         #     fused_feats = sem_feats
         # baseline fusion
 
-        # Bi-Fusion idea
-        ######train11
-        fused_feats = []
+        ####train12
         if self.use_sta:
-            detail_feats = self.sta(x)
-
-            for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
-                # 1. 保证空间大小一致
-                cat = torch.cat([sem_feat, detail_feat], 1)
-
-                # 2. detail -> sem 的投影 (语义空间)
-                # ⭐ detach 非常关键：防止 detail 的梯度污染 transformer
-                detail_no_grad = detail_feat.detach()
-
-                det_proj_for_sem = self.det_to_sem[i](detail_no_grad)  # [B, s_ch, H, W]
-
-                # 3. 使用 gate 过滤哪些 detail 信息真的有帮助
-                sem_attn = self.sem_gates[i](torch.cat([sem_feat, detail_no_grad], 1))
-
-                # 4. 只增强 sem（语义）分支
-                sem_feat = sem_feat + sem_attn * det_proj_for_sem
-
-                # 5. 输出仍然 concat，但 detail 的梯度仍然存在（用于 backbone 训练）
-                fused = self.post_fuse_reduce[i](
-                    torch.cat([sem_feat, detail_feat], dim=1)
-                )
-
-                fused_feats.append(fused)
+            fused_feats = sem_feats
         else:
             fused_feats = sem_feats
-        ######train11
+        ####train12
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
