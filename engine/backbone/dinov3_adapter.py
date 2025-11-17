@@ -36,34 +36,34 @@ class SpatialPriorModulev2(nn.Module):
             ]
         )
         # # 1/8
-        # self.conv2 = nn.Sequential(
-        #     *[
-        #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-        #         nn.SyncBatchNorm(2 * inplanes),
-        #     ]
-        # )
-        # # 1/16
-        # self.conv3 = nn.Sequential(
-        #     *[
-        #         nn.GELU(),
-        #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-        #         nn.SyncBatchNorm(4 * inplanes),
-        #     ]
-        # )
-        ## 1/8
         self.conv2 = nn.Sequential(
-            nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-            # Depthwise conv
-            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-            nn.SyncBatchNorm(2 * inplanes),
+            *[
+                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(2 * inplanes),
+            ]
         )
-
-        ## 1/16
+        # 1/16
         self.conv3 = nn.Sequential(
-            nn.GELU(),
-            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.SyncBatchNorm(4 * inplanes),
+            *[
+                nn.GELU(),
+                nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(4 * inplanes),
+            ]
         )
+        ## 1/8
+        # self.conv2 = nn.Sequential(
+        #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+        #     # Depthwise conv
+        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+        #     nn.SyncBatchNorm(2 * inplanes),
+        # )
+        #
+        # ## 1/16
+        # self.conv3 = nn.Sequential(
+        #     nn.GELU(),
+        #     nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+        #     nn.SyncBatchNorm(4 * inplanes),
+        # )
         # 1/32
         self.conv4 = nn.Sequential(
             *[
@@ -81,6 +81,7 @@ class SpatialPriorModulev2(nn.Module):
 
         return c2, c3, c4
 
+        
 
 @register()
 class DINOv3STAs(nn.Module):
@@ -143,6 +144,26 @@ class DINOv3STAs(nn.Module):
         ])
 
 
+        # --- Bi-Fusion gates (per-scale) ---
+        # sem_ch: transformer embedding dim (embed_dim)
+        # det_chs: channels from SpatialPriorModulev2 -> [2*conv_inplane, 4*conv_inplane, 4*conv_inplane]
+        sem_chs = [embed_dim, embed_dim, embed_dim]
+        det_chs = [conv_inplane * 2, conv_inplane * 4, conv_inplane * 4]
+
+        # add lowpass per-scale
+        self.detail_lowpass = nn.ModuleList()
+        for s_ch, d_ch in zip(sem_chs, det_chs):
+            self.detail_lowpass.append(
+                nn.Sequential(
+                    nn.Conv2d(d_ch, d_ch, kernel_size=3, padding=1, groups=d_ch, bias=False),
+                    nn.SyncBatchNorm(d_ch),
+                )
+            )
+
+
+
+
+
     def forward(self, x):
         # Code for matching with oss
         H_c, W_c = x.shape[2] // 16, x.shape[3] // 16
@@ -178,32 +199,16 @@ class DINOv3STAs(nn.Module):
         #     fused_feats = sem_feats
         # baseline fusion
 
-        ####train13
+        ####train15
         fused_feats = []
         if self.use_sta:
-            detail_feats = self.sta(x)  # returns c2(=1/8), c3(=1/16), c4(=1/32)
+            detail_feats = self.sta(x)
             for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
-                # align spatial sizes (just in case)
-                if detail_feat.shape[-2:] != sem_feat.shape[-2:]:
-                    detail_feat = F.interpolate(detail_feat, size=sem_feat.shape[-2:], mode='bilinear',
-                                                align_corners=False)
-
-                if i == 0:  # fuse only 1/8 (coarsest)
-                    # detach detail to avoid gradient flowing back into STA (原设计)
-                    fused = torch.cat([sem_feat, detail_feat.detach()], dim=1)
-                    fused_feats.append(fused)
-                else:
-                    # NOT fusing: create zero placeholder with same shape as detail_feat
-                    # so the conv in __init__ still receives expected channels (embed_dim + conv_inplane*4)
-                    zeros = torch.zeros(
-                        (sem_feat.shape[0], detail_feat.shape[1], sem_feat.shape[2], sem_feat.shape[3]),
-                        dtype=sem_feat.dtype, device=sem_feat.device
-                    )
-                    fused = torch.cat([sem_feat, zeros], dim=1)
-                    fused_feats.append(fused)
+                detail_filtered = self.detail_lowpass[i](detail_feat)
+                fused_feats.append(torch.cat([sem_feat, detail_filtered], dim=1))
         else:
             fused_feats = sem_feats
-        ####train13
+        ####train15
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
