@@ -28,11 +28,11 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/val
-#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_val.json
+    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/val
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_val.json
 #测试集
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/test
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_test.json
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/test
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_test.json
     return_masks: False
     transforms:
       type: Compose
