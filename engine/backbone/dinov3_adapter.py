@@ -144,25 +144,6 @@ class DINOv3STAs(nn.Module):
         ])
 
 
-        # --- Bi-Fusion gates (per-scale) ---
-        # sem_ch: transformer embedding dim (embed_dim)
-        # det_chs: channels from SpatialPriorModulev2 -> [2*conv_inplane, 4*conv_inplane, 4*conv_inplane]
-        sem_chs = [embed_dim, embed_dim, embed_dim]
-        det_chs = [conv_inplane * 2, conv_inplane * 4, conv_inplane * 4]
-
-        # add lowpass per-scale
-        self.detail_lowpass = nn.ModuleList()
-        for s_ch, d_ch in zip(sem_chs, det_chs):
-            self.detail_lowpass.append(
-                nn.Sequential(
-                    nn.Conv2d(d_ch, d_ch, kernel_size=3, padding=1, groups=d_ch, bias=False),
-                    nn.SyncBatchNorm(d_ch),
-                )
-            )
-
-
-
-
 
     def forward(self, x):
         # Code for matching with oss
