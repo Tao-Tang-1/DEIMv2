@@ -190,25 +190,15 @@ class DINOv3STAs(nn.Module):
             sem_feats.append(sem_feat)
 
         # baseline fusion
-        # fused_feats = []
-        # if self.use_sta:
-        #     detail_feats = self.sta(x)
-        #     for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-        #         fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
-        # else:
-        #     fused_feats = sem_feats
-        # baseline fusion
-
-        ####train15
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
-            for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
-                detail_filtered = self.detail_lowpass[i](detail_feat)
-                fused_feats.append(torch.cat([sem_feat, detail_filtered], dim=1))
+            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
         else:
             fused_feats = sem_feats
-        ####train15
+        # baseline fusion
+
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
