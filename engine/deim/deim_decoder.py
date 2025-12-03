@@ -331,6 +331,15 @@ class DEIMTransformer(nn.Module):
             [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
 
+
+
+        # dec_score_head = nn.Linear(hidden_dim, num_classes)
+        # self.dec_score_head = nn.ModuleList([dec_score_head] * num_layers)
+        #
+        # # Fully share bbox head for all layers
+        # dec_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max+1), 3, act=mlp_act)
+        # self.dec_bbox_head = nn.ModuleList([dec_bbox_head] * num_layers)
+
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
             anchors, valid_mask = self._generate_anchors()

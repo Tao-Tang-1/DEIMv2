@@ -4,15 +4,15 @@ evaluator:
   type: CocoEvaluator
   iou_types: ['bbox', ]
 
-num_classes: 1 # your dataset classes
+num_classes: 2 # your dataset classes
 remap_mscoco_category: False
 
 train_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/train
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_train.json
+    img_folder: /tangquan/DatasetT/WheatMixedPlants/small_200/images/train
+    ann_file: /tangquan/DatasetT/WheatMixedPlants/small_200/annotations/annotations_train.json
     return_masks: False
     transforms:
       type: Compose
@@ -28,8 +28,8 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/val
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_val.json
+    img_folder: /tangquan/DatasetT/WheatMixedPlants/small_200/images/val
+    ann_file: /tangquan/DatasetT/WheatMixedPlants/small_200/annotations/annotations_val.json
 #测试集
 #    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images/test
 #    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/annotations/instances_test.json

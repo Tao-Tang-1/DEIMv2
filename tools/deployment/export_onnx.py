@@ -85,15 +85,34 @@ def main(args, ):
         onnx.checker.check_model(onnx_model)
         print('Check export onnx model done...')
 
+    # if args.simplify:
+    #     import onnx
+    #     import onnxsim
+    #     dynamic = True
+    #     # input_shapes = {'images': [1, 3, 640, 640], 'orig_target_sizes': [1, 2]} if dynamic else None
+    #     input_shapes = {'images': data.shape, 'orig_target_sizes': size.shape} if dynamic else None
+    #     onnx_model_simplify, check = onnxsim.simplify(output_file, test_input_shapes=input_shapes)
+    #     onnx.save(onnx_model_simplify, output_file)
+    #     print(f'Simplify onnx model {check}...')
     if args.simplify:
-        import onnx
-        import onnxsim
-        dynamic = True
-        # input_shapes = {'images': [1, 3, 640, 640], 'orig_target_sizes': [1, 2]} if dynamic else None
-        input_shapes = {'images': data.shape, 'orig_target_sizes': size.shape} if dynamic else None
-        onnx_model_simplify, check = onnxsim.simplify(output_file, test_input_shapes=input_shapes)
-        onnx.save(onnx_model_simplify, output_file)
-        print(f'Simplify onnx model {check}...')
+        try:
+            import onnx
+            import onnxsim
+            # 固定输入形状
+            input_shapes = {'images': data.shape, 'orig_target_sizes': size.shape}
+            onnx_model_simplify, check = onnxsim.simplify(
+                output_file,
+                test_input_shapes=input_shapes,
+                skip_fuse_bn=True  # 避免部分 BN 融合出错
+            )
+            if check:
+                onnx.save(onnx_model_simplify, output_file)
+                print(f'Simplify onnx model success: {check}')
+            else:
+                print('Simplify onnx model failed, using original ONNX.')
+        except Exception as e:
+            print(f'Simplify failed: {e}, using original ONNX.')
+
 
 
 if __name__ == '__main__':

@@ -25,6 +25,15 @@ class DetSolver(BaseSolver):
         self.train()
         args = self.cfg
 
+        # # 🔥🔥🔥 在这里安全打印参数（模型已经 build 完）
+        # print("=== Model Parameters ===")
+        # for i, (name, param) in enumerate(self.model.named_parameters()):
+        #     print(f"{i:4d}  {name}   requires_grad={param.requires_grad}")
+        # print("==============================================")
+        #
+        # n_parameters, model_stats = stats(self.cfg)
+        # print(model_stats)
+
         n_parameters, model_stats = stats(self.cfg)
         print(model_stats)
         print("-"*42 + "Start training" + "-"*43)
