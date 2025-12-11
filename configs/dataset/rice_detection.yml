@@ -11,8 +11,8 @@ train_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/RiceHybrids/morphological_difference_2048_coco/images/train
-    ann_file: /tangquan/DatasetT/RiceHybrids/morphological_difference_2048_coco/annotations/annotations_train.json
+    img_folder: /tangquan/DatasetT/RiceHybrids/morphological_difference_labels/coco_train/images/train
+    ann_file: /tangquan/DatasetT/RiceHybrids/morphological_difference_labels/coco_train/annotations/annotations_train.json
     return_masks: False
     transforms:
       type: Compose
@@ -28,11 +28,11 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/RiceHybrids/morphological_difference_2048_coco/images/val
-    ann_file: /tangquan/DatasetT/RiceHybrids/morphological_difference_2048_coco/annotations/annotations_val.json
+    img_folder: /tangquan/DatasetT/RiceHybrids/morphological_difference_labels/coco_train/images/val
+    ann_file: /tangquan/DatasetT/RiceHybrids/morphological_difference_labels/coco_train/annotations/annotations_val.json
 #测试集
-#    img_folder: /tangquan/DatasetT/RiceHybrids/morphological_difference_2048_coco/images/test
-#    ann_file: /tangquan/DatasetT/RiceHybrids/morphological_difference_2048_coco/annotations/annotations_test.json
+#    img_folder: /tangquan/DatasetT/RiceHybrids/morphological_difference_labels/coco_train/images/test
+#    ann_file: /tangquan/DatasetT/RiceHybrids/morphological_difference_labels/coco_train/annotations/annotations_test.json
     return_masks: False
     transforms:
       type: Compose

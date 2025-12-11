@@ -79,6 +79,9 @@ class DetSolver(BaseSolver):
         start_epoch = self.last_epoch + 1
         for epoch in range(start_epoch, args.epoches):
 
+            for i, pg in enumerate(self.optimizer.param_groups):
+                print(f"Epoch {epoch} | group {i} | params: {len(pg['params'])} | lr: {pg['lr']}")
+
             self.train_dataloader.set_epoch(epoch)
             # self.train_dataloader.dataset.set_epoch(epoch)
             if dist_utils.is_dist_available_and_initialized():
