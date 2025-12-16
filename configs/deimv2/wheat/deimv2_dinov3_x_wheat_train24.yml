@@ -7,7 +7,7 @@ __include__: [
 ]
 
 
-output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train21
+output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train24
   
 DEIM:
   backbone: DINOv3STAs
