@@ -144,26 +144,6 @@ class DINOv3STAs(nn.Module):
         ])
 
 
-        ##门控
-        self.gates = nn.ModuleList([
-            nn.Sequential(
-                nn.AdaptiveAvgPool2d(1),
-                nn.Conv2d(embed_dim, conv_inplane * 2, kernel_size=1),
-                nn.Sigmoid()
-            ),
-            nn.Sequential(
-                nn.AdaptiveAvgPool2d(1),
-                nn.Conv2d(embed_dim, conv_inplane * 4, kernel_size=1),
-                nn.Sigmoid()
-            ),
-            nn.Sequential(
-                nn.AdaptiveAvgPool2d(1),
-                nn.Conv2d(embed_dim, conv_inplane * 4, kernel_size=1),
-                nn.Sigmoid()
-            ),
-        ])
-
-
 
     def forward(self, x):
         # Code for matching with oss
@@ -191,24 +171,14 @@ class DINOv3STAs(nn.Module):
             sem_feats.append(sem_feat)
 
         # baseline fusion
-        # fused_feats = []
-        # if self.use_sta:
-        #     detail_feats = self.sta(x)
-        #     for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-        #         fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
-        # else:
-        #     fused_feats = sem_feats
-        # baseline fusion
-
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
-            for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
-                gate = self.gates[i](sem_feat)  # [B, C_sta, 1, 1]
-                gated_detail = detail_feat * (1 + gate) # 通道级调制
-                fused_feats.append(torch.cat([sem_feat, gated_detail], dim=1))
+            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
         else:
             fused_feats = sem_feats
+        # baseline fusion
 
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
