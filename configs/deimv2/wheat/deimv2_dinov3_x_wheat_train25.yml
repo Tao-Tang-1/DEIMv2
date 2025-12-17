@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train24
+output_dir: ./outputs/wheat_train/deimv2_dinov3_x_wheat_train25
 
 sync_bn: True
 find_unused_parameters: True
@@ -196,7 +196,7 @@ DEIMCriterion:
 
   matcher:
     type: HungarianMatcher
-    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
+    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2,cost_center: 0.3}
     alpha: 0.25
     gamma: 2.0
     change_matcher: True
