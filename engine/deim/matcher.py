@@ -43,9 +43,9 @@ class HungarianMatcher(nn.Module):
         self.cost_bbox = weight_dict['cost_bbox']
         self.cost_giou = weight_dict['cost_giou']
 
-        ######增加
-        self.cost_center = weight_dict.get('cost_center', 0.0)
-        ######增加
+        # ######增加
+        # self.cost_center = weight_dict.get('cost_center', 0.0)
+        # ######增加
 
         self.change_matcher = change_matcher
         self.iou_order_alpha = iou_order_alpha
@@ -57,9 +57,9 @@ class HungarianMatcher(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
 
-        # assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0, "all costs cant be 0"
+        assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0, "all costs cant be 0"
         ######增加
-        assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0 or self.cost_center != 0
+        # assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0 or self.cost_center != 0
         ######增加
 
     @torch.no_grad()
@@ -130,26 +130,26 @@ class HungarianMatcher(nn.Module):
             # -------------------------------
             # out_bbox, tgt_bbox: cx, cy, w, h in [0,1]
 
-            out_centers = out_bbox[:, :2]  # (Nq, 2)
-            tgt_centers = tgt_bbox[:, :2]  # (Ng, 2)
-
-            cost_center = torch.cdist(
-                out_centers,
-                tgt_centers,
-                p=2
-            )
+            # out_centers = out_bbox[:, :2]  # (Nq, 2)
+            # tgt_centers = tgt_bbox[:, :2]  # (Ng, 2)
+            #
+            # cost_center = torch.cdist(
+            #     out_centers,
+            #     tgt_centers,
+            #     p=2
+            # )
             #####增加
 
             # Final cost matrix 3 * self.cost_bbox + 2 * self.cost_class + self.cost_giou
-            # C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+            C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
 
             #####增加
-            C = (
-                    self.cost_bbox * cost_bbox +
-                    self.cost_class * cost_class +
-                    self.cost_giou * cost_giou +
-                    self.cost_center * cost_center
-            )
+            # C = (
+            #         self.cost_bbox * cost_bbox +
+            #         self.cost_class * cost_class +
+            #         self.cost_giou * cost_giou +
+            #         self.cost_center * cost_center
+            # )
             #####增加
 
         C = C.view(bs, num_queries, -1).cpu()

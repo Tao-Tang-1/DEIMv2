@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 torchrun  train.py -c configs/deimv2/rice/deimv2_dinov3_x_rice_train_train1.yml --use-amp --seed=0 -r outputs/rice_train/deimv2_dinov3_x_rice_train_train1/last.pth

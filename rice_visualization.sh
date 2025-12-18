@@ -1,0 +1,1 @@
+python tools/inference/torch_inf.py -c configs/deimv2/rice/deimv2_dinov3_x_rice_train_train1.yml -r outputs/rice_train/deimv2_dinov3_x_rice_train_train1/best_stg1.pth --input /tangquan/DatasetT/RiceHybrids/morphological_difference_labels_phone/coco_train/images/test/IMG_20250807_103441.jpg --device cuda:0
