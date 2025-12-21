@@ -68,6 +68,14 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout4 = nn.Dropout(dropout)
         self.norm3 = RMSNorm(d_model)
 
+        # Qwen-style attention gating
+        self.attn_gate = nn.Sequential(
+            RMSNorm(d_model),
+            nn.Linear(d_model, d_model)
+        )
+        nn.init.constant_(self.attn_gate[1].weight, 0.)
+        nn.init.constant_(self.attn_gate[1].bias, 1.)
+
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else tensor + pos
 
@@ -77,7 +85,8 @@ class TransformerDecoderLayer(nn.Module):
                 value,
                 spatial_shapes,
                 attn_mask=None,
-                query_pos_embed=None):
+                query_pos_embed=None,
+                layer_id=None):
 
         # self attention
         q = k = self.with_pos_embed(target, query_pos_embed)
@@ -92,6 +101,11 @@ class TransformerDecoderLayer(nn.Module):
             reference_points,
             value,
             spatial_shapes)
+
+        # Qwen-style attention gating
+        alpha = min(1.0, max(0.0, (layer_id - 1) / 2))
+        gate = torch.sigmoid(self.attn_gate(target2))
+        target2 = target2 * (1 - alpha + alpha * gate)
 
         if self.use_gateway:
             target = self.gateway(target, self.dropout2(target2))
@@ -186,7 +200,7 @@ class TransformerDecoder(nn.Module):
                 output = F.interpolate(output, size=query_pos_embed.shape[-1])
                 output_detach = output.detach()
 
-            output = layer(output, ref_points_input, value, spatial_shapes, attn_mask, query_pos_embed)
+            output = layer(output, ref_points_input, value, spatial_shapes, attn_mask, query_pos_embed,layer_id=i)
 
             if i == 0 :
                 # Initial bounding box predictions with inverse sigmoid refinement
