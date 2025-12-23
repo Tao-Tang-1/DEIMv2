@@ -68,14 +68,6 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout4 = nn.Dropout(dropout)
         self.norm3 = RMSNorm(d_model)
 
-        # Qwen-style attention gating
-        self.attn_gate = nn.Sequential(
-            RMSNorm(d_model),
-            nn.Linear(d_model, d_model)
-        )
-        nn.init.constant_(self.attn_gate[1].weight, 0.)
-        nn.init.constant_(self.attn_gate[1].bias, 1.)
-
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else tensor + pos
 
@@ -85,8 +77,7 @@ class TransformerDecoderLayer(nn.Module):
                 value,
                 spatial_shapes,
                 attn_mask=None,
-                query_pos_embed=None,
-                layer_id=None):
+                query_pos_embed=None):
 
         # self attention
         q = k = self.with_pos_embed(target, query_pos_embed)
@@ -101,11 +92,6 @@ class TransformerDecoderLayer(nn.Module):
             reference_points,
             value,
             spatial_shapes)
-
-        # Qwen-style attention gating
-        alpha = min(1.0, max(0.0, (layer_id - 1) / 2))
-        gate = torch.sigmoid(self.attn_gate(target2))
-        target2 = target2 * (1 - alpha + alpha * gate)
 
         if self.use_gateway:
             target = self.gateway(target, self.dropout2(target2))
@@ -200,7 +186,7 @@ class TransformerDecoder(nn.Module):
                 output = F.interpolate(output, size=query_pos_embed.shape[-1])
                 output_detach = output.detach()
 
-            output = layer(output, ref_points_input, value, spatial_shapes, attn_mask, query_pos_embed,layer_id=i)
+            output = layer(output, ref_points_input, value, spatial_shapes, attn_mask, query_pos_embed)
 
             if i == 0 :
                 # Initial bounding box predictions with inverse sigmoid refinement
@@ -344,15 +330,6 @@ class DEIMTransformer(nn.Module):
         self.dec_bbox_head = nn.ModuleList(
             [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
-
-
-
-        # dec_score_head = nn.Linear(hidden_dim, num_classes)
-        # self.dec_score_head = nn.ModuleList([dec_score_head] * num_layers)
-        #
-        # # Fully share bbox head for all layers
-        # dec_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max+1), 3, act=mlp_act)
-        # self.dec_bbox_head = nn.ModuleList([dec_bbox_head] * num_layers)
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:

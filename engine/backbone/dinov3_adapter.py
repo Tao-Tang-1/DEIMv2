@@ -10,7 +10,7 @@ This software may be used and distributed in accordance with
 the terms of the DINOv3 License Agreement.
 """
 
-import math
+import os
 
 import torch
 import torch.nn as nn
@@ -20,6 +20,7 @@ import torch.utils.checkpoint as cp
 from functools import partial
 from ..core import register
 from .vit_tiny import VisionTransformer
+from .dinov3 import DinoVisionTransformer
 
 
 class SpatialPriorModulev2(nn.Module):
@@ -35,7 +36,7 @@ class SpatialPriorModulev2(nn.Module):
                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
             ]
         )
-        # # 1/8
+        # 1/8
         # self.conv2 = nn.Sequential(
         #     *[
         #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
@@ -81,7 +82,6 @@ class SpatialPriorModulev2(nn.Module):
 
         return c2, c3, c4
 
-        
 
 @register()
 class DINOv3STAs(nn.Module):
@@ -100,18 +100,19 @@ class DINOv3STAs(nn.Module):
     ):
         super(DINOv3STAs, self).__init__()
         if 'dinov3' in name:
-            self.dinov3 = torch.hub.load('./dinov3', name, source='local', weights=weights_path)
-            while len(self.dinov3.blocks) != (interaction_indexes[-1] + 1):
-                del self.dinov3.blocks[-1]
-            del self.dinov3.head
-        else:
-            self.dinov3 =  VisionTransformer(embed_dim=embed_dim, num_heads=num_heads)
-            if weights_path is not None:
+            self.dinov3 = DinoVisionTransformer(name=name)
+            if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading ckpt from {weights_path}...')
-                checkpoint = torch.load(weights_path)
-                self.dinov3._model.load_state_dict(checkpoint)
+                self.dinov3.load_state_dict(torch.load(weights_path))
             else:
-                print('Training ViT-Tiny from scratch!')
+                print('Training DINOv3 from scratch...')
+        else:
+            self.dinov3 =  VisionTransformer(embed_dim=embed_dim, num_heads=num_heads, return_layers=interaction_indexes)
+            if weights_path is not None and os.path.exists(weights_path):
+                print(f'Loading ckpt from {weights_path}...')
+                self.dinov3._model.load_state_dict(torch.load(weights_path))
+            else:
+                print('Training ViT-Tiny from scratch...')
 
         embed_dim = self.dinov3.embed_dim
         self.interaction_indexes = interaction_indexes
@@ -143,8 +144,6 @@ class DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim)
         ])
 
-
-
     def forward(self, x):
         # Code for matching with oss
         H_c, W_c = x.shape[2] // 16, x.shape[3] // 16
@@ -170,7 +169,7 @@ class DINOv3STAs(nn.Module):
             sem_feat = F.interpolate(sem_feat, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
             sem_feats.append(sem_feat)
 
-        # baseline fusion
+        # fusion
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
@@ -178,8 +177,6 @@ class DINOv3STAs(nn.Module):
                 fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
         else:
             fused_feats = sem_feats
-        # baseline fusion
-
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
