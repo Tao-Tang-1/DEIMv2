@@ -23,64 +23,129 @@ from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
 
 
-class SpatialPriorModulev2(nn.Module):
+# class SpatialPriorModulev2(nn.Module):
+#     def __init__(self, inplanes=16):
+#         super().__init__()
+#
+#         # 1/4
+#         self.stem = nn.Sequential(
+#             *[
+#                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(inplanes),
+#                 nn.GELU(),
+#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+#             ]
+#         )
+#         # 1/8
+#         self.conv2 = nn.Sequential(
+#             *[
+#                 nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(2 * inplanes),
+#             ]
+#         )
+#         # 1/16
+#         self.conv3 = nn.Sequential(
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
+#         )
+#         ## 1/8
+#         # self.conv2 = nn.Sequential(
+#         #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+#         #     # Depthwise conv
+#         #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+#         #     nn.SyncBatchNorm(2 * inplanes),
+#         # )
+#         #
+#         # ## 1/16
+#         # self.conv3 = nn.Sequential(
+#         #     nn.GELU(),
+#         #     nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+#         #     nn.SyncBatchNorm(4 * inplanes),
+#         # )
+#         # 1/32
+#         self.conv4 = nn.Sequential(
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
+#         )
+#
+#     def forward(self, x):
+#         c1 = self.stem(x)
+#         c2 = self.conv2(c1)     # 1/8
+#         c3 = self.conv3(c2)     # 1/16
+#         c4 = self.conv4(c3)     # 1/32
+#
+#         return c2, c3, c4
+
+class DeepSpatialPrior(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
-
-        # 1/4
+        # 输入下采样 1/4
         self.stem = nn.Sequential(
-            *[
-                nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(inplanes),
-                nn.GELU(),
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-            ]
+            nn.Conv2d(3, inplanes, 7, stride=2, padding=3, bias=False),
+            nn.SyncBatchNorm(inplanes),
+            nn.GELU(),
+            nn.MaxPool2d(3, stride=2, padding=1),
         )
+
         # 1/8
         self.conv2 = nn.Sequential(
-            *[
-                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(2 * inplanes),
-            ]
+            nn.Conv2d(inplanes, 2*inplanes, 5, stride=2, padding=2, bias=False),
+            nn.SyncBatchNorm(2*inplanes),
+            nn.GELU(),
         )
-        # 1/16
-        self.conv3 = nn.Sequential(
-            *[
-                nn.GELU(),
-                nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(4 * inplanes),
-            ]
-        )
-        ## 1/8
-        # self.conv2 = nn.Sequential(
-        #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-        #     # Depthwise conv
-        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-        #     nn.SyncBatchNorm(2 * inplanes),
-        # )
-        #
-        # ## 1/16
-        # self.conv3 = nn.Sequential(
-        #     nn.GELU(),
-        #     nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
-        #     nn.SyncBatchNorm(4 * inplanes),
-        # )
+
+        # 1/16 多感受野
+        self.conv3 = nn.ModuleList([
+            nn.Conv2d(2*inplanes, 4*inplanes, 3, stride=2, padding=1, dilation=1, bias=False),
+            nn.Conv2d(2*inplanes, 4*inplanes, 3, stride=2, padding=2, dilation=2, bias=False),
+            nn.Conv2d(2*inplanes, 4*inplanes, 3, stride=2, padding=3, dilation=3, bias=False),
+        ])
+        self.bn3 = nn.SyncBatchNorm(4*inplanes)
+        self.gelu3 = nn.GELU()
+
         # 1/32
         self.conv4 = nn.Sequential(
-            *[
-                nn.GELU(),
-                nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(4 * inplanes),
-            ]
+            nn.Conv2d(4*inplanes, 4*inplanes, 3, stride=2, padding=1, bias=False),
+            nn.SyncBatchNorm(4*inplanes),
+            nn.GELU(),
         )
 
-    def forward(self, x):
-        c1 = self.stem(x)
-        c2 = self.conv2(c1)     # 1/8
-        c3 = self.conv3(c2)     # 1/16
-        c4 = self.conv4(c3)     # 1/32
+        # 通道注意力
+        self.ca2 = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Conv2d(2*inplanes, 2*inplanes, 1), nn.Sigmoid())
+        self.ca3 = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Conv2d(4*inplanes, 4*inplanes, 1), nn.Sigmoid())
+        self.ca4 = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Conv2d(4*inplanes, 4*inplanes, 1), nn.Sigmoid())
 
-        return c2, c3, c4
+        # 对齐 c2 通道数到 4*inplanes
+        self.align_c2 = nn.Conv2d(2*inplanes, 4*inplanes, 1, bias=False)
+
+    def forward(self, x):
+        c1 = self.stem(x)           # 1/4
+        c2 = self.conv2(c1)         # 1/8
+        c2 = c2 * self.ca2(c2)      # 通道注意力增强
+
+        # 多感受野卷积融合
+        c3 = sum(conv(c2) for conv in self.conv3)
+        c3 = self.bn3(c3)
+        c3 = self.gelu3(c3)
+        c3 = c3 * self.ca3(c3)      # 通道注意力增强
+
+        c4 = self.conv4(c3)         # 1/32
+        c4 = c4 * self.ca4(c4)      # 通道注意力增强
+
+        # 跨尺度融合
+        c2_aligned = self.align_c2(c2)   # 对齐通道数
+        c3_up = F.interpolate(c3, size=c2.shape[2:], mode='bilinear', align_corners=False)
+        c4_up = F.interpolate(c4, size=c2.shape[2:], mode='bilinear', align_corners=False)
+        fused = c2_aligned + c3_up + c4_up
+
+        return c2, c3, c4, fused
+
 
 
 @register()
@@ -126,7 +191,8 @@ class DINOv3STAs(nn.Module):
         self.use_sta = use_sta
         if use_sta:
             print(f"Using Lite Spatial Prior Module with inplanes={conv_inplane}")
-            self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
+            # self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
+            self.sta = DeepSpatialPrior(inplanes=conv_inplane)
         else:
             conv_inplane = 0
 
