@@ -37,34 +37,34 @@ class LargeKernelSpatialPriorModule(nn.Module):
             ]
         )
         # 1/8
-        self.conv2 = nn.Sequential(
-            *[
-                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(2 * inplanes),
-            ]
-        )
-        # 1/16
-        self.conv3 = nn.Sequential(
-            *[
-                nn.GELU(),
-                nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(4 * inplanes),
-            ]
-        )
-        ## 1/8
         # self.conv2 = nn.Sequential(
-        #     nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-        #     # Depthwise conv
-        #     nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-        #     nn.SyncBatchNorm(2 * inplanes),
+        #     *[
+        #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+        #         nn.SyncBatchNorm(2 * inplanes),
+        #     ]
         # )
-        #
-        # ## 1/16
+        # # 1/16
         # self.conv3 = nn.Sequential(
-        #     nn.GELU(),
-        #     nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
-        #     nn.SyncBatchNorm(4 * inplanes),
+        #     *[
+        #         nn.GELU(),
+        #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+        #         nn.SyncBatchNorm(4 * inplanes),
+        #     ]
         # )
+        ## 1/8
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+            # Depthwise conv
+            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+            nn.SyncBatchNorm(2 * inplanes),
+        )
+
+        ## 1/16
+        self.conv3 = nn.Sequential(
+            nn.GELU(),
+            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.SyncBatchNorm(4 * inplanes),
+        )
         # 1/32
         self.conv4 = nn.Sequential(
             *[
