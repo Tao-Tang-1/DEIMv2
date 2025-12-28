@@ -59,19 +59,22 @@ class LargeKernelSpatialPriorModule(nn.Module):
             nn.SyncBatchNorm(2 * inplanes),
         )
 
-        ## 1/16
+        # 1/16 - 引入 Dilation=2 (感受野从 7x7 变为 13x13)
+        # 注意 padding 需要同步调整：padding = dilation * (kernel_size - 1) // 2
         self.conv3 = nn.Sequential(
             nn.GELU(),
-            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2,
+                      padding=6, dilation=2, bias=False),
             nn.SyncBatchNorm(4 * inplanes),
         )
-        # 1/32
+
+        # 1/32 - 引入 Dilation=2 或更高，并使用 3x3 卷积
+        # 在极低分辨率下，使用空洞卷积可以防止大目标特征过于碎片化
         self.conv4 = nn.Sequential(
-            *[
-                nn.GELU(),
-                nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(4 * inplanes),
-            ]
+            nn.GELU(),
+            nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2,
+                      padding=2, dilation=2, bias=False),
+            nn.SyncBatchNorm(4 * inplanes),
         )
 
     def forward(self, x):
@@ -132,11 +135,19 @@ class DINOv3STAs(nn.Module):
             conv_inplane = 0
 
         # linear projection
+        # hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
+        # self.convs = nn.ModuleList([
+        #     nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
+        #     nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
+        #     nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
+        # ])
+        # 【优化点】针对大目标，将融合卷积改为 3x3
+        # 3x3 卷积可以在融合 ViT 和 CNN 特征时提供更好的局部平滑，减少拼接带来的突变
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
         self.convs = nn.ModuleList([
-            nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            nn.Conv2d(embed_dim + conv_inplane * 2, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False)
         ])
         # norm
         self.norms = nn.ModuleList([
