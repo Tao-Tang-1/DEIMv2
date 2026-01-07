@@ -22,7 +22,6 @@ from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
 
-
 # class LargeKernelSpatialPriorModule(nn.Module):
 #     def __init__(self, inplanes=16):
 #         super().__init__()
@@ -37,44 +36,27 @@ from .dinov3 import DinoVisionTransformer
 #             ]
 #         )
 #         # 1/8
-#         # self.conv2 = nn.Sequential(
-#         #     *[
-#         #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#         #         nn.SyncBatchNorm(2 * inplanes),
-#         #     ]
-#         # )
-#         # # 1/16
-#         # self.conv3 = nn.Sequential(
-#         #     *[
-#         #         nn.GELU(),
-#         #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#         #         nn.SyncBatchNorm(4 * inplanes),
-#         #     ]
-#         # )
-#         ## 1/8
 #         self.conv2 = nn.Sequential(
-#             nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-#             # Depthwise conv
-#             nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-#             nn.SyncBatchNorm(2 * inplanes),
+#             *[
+#                 nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(2 * inplanes),
+#             ]
 #         )
-#
-#         # 1/16 - 引入 Dilation=2 (感受野从 7x7 变为 13x13)
-#         # 注意 padding 需要同步调整：padding = dilation * (kernel_size - 1) // 2
+#         # 1/16
 #         self.conv3 = nn.Sequential(
-#             nn.GELU(),
-#             nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2,
-#                       padding=6, dilation=2, bias=False),
-#             nn.SyncBatchNorm(4 * inplanes),
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
 #         )
-#
-#         # 1/32 - 引入 Dilation=2 或更高，并使用 3x3 卷积
-#         # 在极低分辨率下，使用空洞卷积可以防止大目标特征过于碎片化
+#         # 1/32
 #         self.conv4 = nn.Sequential(
-#             nn.GELU(),
-#             nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2,
-#                       padding=2, dilation=2, bias=False),
-#             nn.SyncBatchNorm(4 * inplanes),
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
 #         )
 #
 #     def forward(self, x):
@@ -88,7 +70,7 @@ class LargeKernelSpatialPriorModule(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
 
-        # 1/4 - 保持不变
+        # 1/4
         self.stem = nn.Sequential(
             *[
                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
@@ -97,38 +79,96 @@ class LargeKernelSpatialPriorModule(nn.Module):
                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
             ]
         )
-
-        # 1/8 - 保持 Large Kernel (7x7)
+        # 1/8
+        # self.conv2 = nn.Sequential(
+        #     *[
+        #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+        #         nn.SyncBatchNorm(2 * inplanes),
+        #     ]
+        # )
+        # # 1/16
+        # self.conv3 = nn.Sequential(
+        #     *[
+        #         nn.GELU(),
+        #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+        #         nn.SyncBatchNorm(4 * inplanes),
+        #     ]
+        # )
+        ## 1/8
         self.conv2 = nn.Sequential(
             nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),
+            # Depthwise conv
+            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
             nn.SyncBatchNorm(2 * inplanes),
         )
 
-        # 1/16 - 【Exp 2 修改点】移除 Dilation
-        # 原 padding=6 (dilation=2), 修改为 padding=3 (dilation=1)
+        ## 1/16
         self.conv3 = nn.Sequential(
             nn.GELU(),
-            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2,
-                      padding=3, dilation=1, bias=False), # 此处移除空洞
+            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
             nn.SyncBatchNorm(4 * inplanes),
         )
-
-        # 1/32 - 【Exp 2 修改点】移除 Dilation
-        # 原 padding=2 (dilation=2), 修改为 padding=1 (dilation=1)
+        # 1/32
         self.conv4 = nn.Sequential(
-            nn.GELU(),
-            nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2,
-                      padding=1, dilation=1, bias=False), # 此处移除空洞
-            nn.SyncBatchNorm(4 * inplanes),
+            *[
+                nn.GELU(),
+                nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(4 * inplanes),
+            ]
         )
 
     def forward(self, x):
         c1 = self.stem(x)
-        c2 = self.conv2(c1)
-        c3 = self.conv3(c2)
-        c4 = self.conv4(c3)
+        c2 = self.conv2(c1)     # 1/8
+        c3 = self.conv3(c2)     # 1/16
+        c4 = self.conv4(c3)     # 1/32
+
         return c2, c3, c4
+# class LargeKernelSpatialPriorModule(nn.Module):
+#     def __init__(self, inplanes=16):
+#         super().__init__()
+#
+#         # 1/4 - 保持不变
+#         self.stem = nn.Sequential(
+#             *[
+#                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(inplanes),
+#                 nn.GELU(),
+#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+#             ]
+#         )
+#
+#         # 1/8 - 保持 Large Kernel (7x7)
+#         self.conv2 = nn.Sequential(
+#             nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+#             nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),
+#             nn.SyncBatchNorm(2 * inplanes),
+#         )
+#
+#         # 1/16 - 【Exp 2 修改点】移除 Dilation
+#         # 原 padding=6 (dilation=2), 修改为 padding=3 (dilation=1)
+#         self.conv3 = nn.Sequential(
+#             nn.GELU(),
+#             nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2,
+#                       padding=3, dilation=1, bias=False), # 此处移除空洞
+#             nn.SyncBatchNorm(4 * inplanes),
+#         )
+#
+#         # 1/32 - 【Exp 2 修改点】移除 Dilation
+#         # 原 padding=2 (dilation=2), 修改为 padding=1 (dilation=1)
+#         self.conv4 = nn.Sequential(
+#             nn.GELU(),
+#             nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2,
+#                       padding=1, dilation=1, bias=False), # 此处移除空洞
+#             nn.SyncBatchNorm(4 * inplanes),
+#         )
+#
+#     def forward(self, x):
+#         c1 = self.stem(x)
+#         c2 = self.conv2(c1)
+#         c3 = self.conv3(c2)
+#         c4 = self.conv4(c3)
+#         return c2, c3, c4
 
 
 @register()

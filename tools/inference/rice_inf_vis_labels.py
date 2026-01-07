@@ -1,0 +1,303 @@
+"""
+DEIMv2: Real-Time Object Detection Meets DINOv3
+Copyright (c) 2025 The DEIMv2 Authors. All Rights Reserved.
+---------------------------------------------------------------------------------
+Modified from D-FINE (https://github.com/Peterande/D-FINE)
+Copyright (c) 2024 The D-FINE Authors. All Rights Reserved.
+"""
+
+import os
+import random
+import sys
+
+import cv2  # Added for video processing
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+from PIL import Image, ImageDraw, ImageFont
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+from engine.core import YAMLConfig
+
+# label_map = {
+#     1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorbike', 5: 'aeroplane',
+#     6: 'bus', 7: 'train', 8: 'truck', 9: 'boat', 10: 'trafficlight',
+#     11: 'firehydrant', 12: 'streetsign', 13: 'stopsign', 14: 'parkingmeter',
+#     15: 'bench', 16: 'bird', 17: 'cat', 18: 'dog', 19: 'horse',
+#     20: 'sheep', 21: 'cow', 22: 'elephant', 23: 'bear', 24: 'zebra',
+#     25: 'giraffe', 26: 'hat', 27: 'backpack', 28: 'umbrella', 29: 'shoe',
+#     30: 'eyeglasses', 31: 'handbag', 32: 'tie', 33: 'suitcase', 34: 'frisbee',
+#     35: 'skis', 36: 'snowboard', 37: 'sportsball', 38: 'kite', 39: 'baseballbat',
+#     40: 'baseballglove', 41: 'skateboard', 42: 'surfboard', 43: 'tennisracket',
+#     44: 'bottle', 45: 'plate', 46: 'wineglass', 47: 'cup', 48: 'fork',
+#     49: 'knife', 50: 'spoon', 51: 'bowl', 52: 'banana', 53: 'apple',
+#     54: 'sandwich', 55: 'orange', 56: 'broccoli', 57: 'carrot', 58: 'hotdog',
+#     59: 'pizza', 60: 'donut', 61: 'cake', 62: 'chair', 63: 'sofa',
+#     64: 'pottedplant', 65: 'bed', 66: 'mirror', 67: 'diningtable', 68: 'window',
+#     69: 'desk', 70: 'toilet', 71: 'door', 72: 'tv', 73: 'laptop',
+#     74: 'mouse', 75: 'remote', 76: 'keyboard', 77: 'cellphone', 78: 'microwave',
+#     79: 'oven', 80: 'toaster', 81: 'sink', 82: 'refrigerator', 83: 'blender',
+#     84: 'book', 85: 'clock', 86: 'vase', 87: 'scissors', 88: 'teddybear',
+#     89: 'hairdrier', 90: 'toothbrush', 91: 'hairbrush'
+# }
+label_map = {
+    0: 'hybrid'
+}
+
+# 自动生成颜色（使用 matplotlib 的配色方案）
+# COLORS = plt.cm.tab20.colors  # 使用 20 种独特颜色，适合 CVPR 论文
+# COLOR_MAP = {label: tuple([int(c * 255) for c in COLORS[i % len(COLORS)]]) for i, label in enumerate(label_map)}
+COLOR_MAP = {0:  (255, 0, 0)}
+
+
+# 绘制函数
+def draw(image, labels, boxes, scores, thrh=0.5, line_width=15):
+    """
+    绘制加粗检测框 + 类别标签（不显示置信度）
+    """
+    drawer = ImageDraw.Draw(image)
+    # ===== 字体大小（关键）=====
+    font_size = max(18, image.size[0] // 40)  # 自适应分辨率
+
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            font_size
+        )
+    except:
+        font = ImageFont.load_default()
+
+    keep = scores > thrh
+    boxes = boxes[keep]
+    labels = labels[keep]
+    scores = scores[keep]
+
+    for i, box in enumerate(boxes):
+        cls_id = labels[i].item()
+        color = COLOR_MAP.get(cls_id, (255, 255, 255))
+        box = list(map(int, box))
+
+        # ===== 1. 画加粗检测框 =====
+        drawer.rectangle(box, outline=color, width=line_width)
+
+        # ===== 2. 类别文本 =====
+        # text = label_map.get(cls_id, str(cls_id))
+        text = f"{label_map[cls_id]} {scores[i].item():.2f}"
+
+        # 文本尺寸
+        text_bbox = drawer.textbbox((0, 0), text, font=font)
+        tw = text_bbox[2] - text_bbox[0]
+        th = text_bbox[3] - text_bbox[1]
+
+        # 默认放在框左上角（向上）
+        tx = box[0]
+        ty = max(0, box[1] - th - 4)
+
+        # 文本背景
+        drawer.rectangle(
+            [tx, ty, tx + tw + 6, ty + th + 4],
+            fill=color
+        )
+
+        # 文本
+        drawer.text(
+            (tx + 3, ty + 2),
+            text,
+            fill="black",
+            font=font
+        )
+
+    return image
+
+
+
+def process_image(model, file_path, size=(640, 640)):
+    im_pil = Image.open(file_path).convert('RGB')
+    w, h = im_pil.size
+    orig_size = torch.tensor([[w, h]]).cuda()
+
+    transforms = T.Compose([
+        T.Resize((size)),
+        T.ToTensor(),
+    ])
+    im_data = transforms(im_pil).unsqueeze(0).cuda()
+
+    output = model(im_data, orig_size)
+
+    draw([im_pil], output)
+
+
+def process_video(model, file_path, size=(640, 640)):
+    cap = cv2.VideoCapture(file_path)
+
+    # Get video properties
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Define the codec and create VideoWriter object
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter('torch_results.mp4', fourcc, fps, (orig_w, orig_h))
+
+    transforms = T.Compose([
+        T.Resize(size),
+        T.ToTensor(),
+    ])
+
+    frame_count = 0
+    print("Processing video frames...")
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Convert frame to PIL image
+        frame_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        w, h = frame_pil.size
+        orig_size = torch.tensor([[w, h]]).cuda()
+
+        im_data = transforms(frame_pil).unsqueeze(0).cuda()
+
+        output = model(im_data, orig_size)
+        labels, boxes, scores = output
+
+        # Draw detections on the frame
+        draw([frame_pil], labels, boxes, scores)
+
+        # Convert back to OpenCV image
+        frame = cv2.cvtColor(np.array(frame_pil), cv2.COLOR_RGB2BGR)
+
+        # Write the frame
+        out.write(frame)
+        frame_count += 1
+
+        if frame_count % 10 == 0:
+            print(f"Processed {frame_count} frames...")
+
+    cap.release()
+    out.release()
+    print("Video processing complete. Result saved as 'results_video.mp4'.")
+
+
+def process_dataset(model, dataset_path, output_path, thrh=0.5, size=(640, 640)):
+    os.makedirs(output_path, exist_ok=True)
+    # result_path = os.path.join(output_path, "results_txt")
+    # os.makedirs(result_path, exist_ok=True)
+
+    # 创建 results_img 文件夹
+    img_output_path = os.path.join(output_path, "results_rice_img")
+    os.makedirs(img_output_path, exist_ok=True)
+
+    image_paths = [os.path.join(dataset_path, f) for f in os.listdir(dataset_path) if
+                   f.endswith(('.jpg', '.png', '.JPG'))]
+
+    transforms = T.Compose([
+        T.Resize(size),
+        T.ToTensor(),
+    ])
+
+    print(f"Found {len(image_paths)} images in validation set...")
+    for idx, file_path in enumerate(image_paths):
+        im_pil = Image.open(file_path).convert('RGB')
+        w, h = im_pil.size
+        orig_size = torch.tensor([[w, h]]).cuda()
+
+        # 推理
+        im_data = transforms(im_pil).unsqueeze(0).cuda()
+        output = model(im_data, orig_size)
+        labels, boxes, scores = output[0]['labels'], output[0]['boxes'], output[0]['scores']
+
+        # 绘制并保存可视化图到 results_img 文件夹
+        vis_image = draw(im_pil.copy(), labels, boxes, scores, thrh)
+        # 修改保存路径到 results_img 文件夹
+        save_path = os.path.join(img_output_path, f"vis_{os.path.basename(file_path)}")
+        vis_image.save(save_path)
+
+        # ====== ⬇️ 保存为标准的 YOLO 格式 ======
+        # txt_name = os.path.splitext(os.path.basename(file_path))[0] + ".txt"
+        # txt_path = os.path.join(result_path, txt_name)
+        # with open(txt_path, "w") as f:
+        #     for i in range(len(scores)):
+        #         if scores[i] < thrh:
+        #             continue
+        #         cls_id = labels[i].item()  # 类别ID
+        #         box = boxes[i].tolist()  # [x_min, y_min, x_max, y_max]
+        #
+        #         # 转换为 YOLO 格式（归一化的中心坐标和宽高）
+        #         x_min, y_min, x_max, y_max = box
+        #         x_center = (x_min + x_max) / 2 / w
+        #         y_center = (y_min + y_max) / 2 / h
+        #         width = (x_max - x_min) / w
+        #         height = (y_max - y_min) / h
+        #
+        #         # 确保坐标在 [0,1] 范围内
+        #         x_center = max(0, min(1, x_center))
+        #         y_center = max(0, min(1, y_center))
+        #         width = max(0, min(1, width))
+        #         height = max(0, min(1, height))
+        #
+        #         # 标准 YOLO 格式：class_id x_center y_center width height
+        #         f.write(f"{cls_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
+        # ====== ⬆️ YOLO 格式保存完成 ======
+
+        if idx % 500 == 0:
+            print(f"Processed {idx}/{len(image_paths)} images...")
+
+    print("Visualization and label saving complete.")
+    # print(f"Results saved in:\n  {img_output_path}\n  {result_rice_path}")
+    print(f"Results saved in:\n  {img_output_path}")
+
+
+def main(args):
+    """Main function"""
+    cfg = YAMLConfig(args.config, resume=args.resume)
+
+    if 'HGNetv2' in cfg.yaml_cfg:
+        cfg.yaml_cfg['HGNetv2']['pretrained'] = False
+
+    if args.resume:
+        checkpoint = torch.load(args.resume, map_location='cpu')
+        if 'ema' in checkpoint:
+            state = checkpoint['ema']['module']
+        else:
+            state = checkpoint['model']
+    else:
+        raise AttributeError('Only support resume to load model.state_dict by now.')
+
+    # Load train mode state and convert to deploy mode
+    cfg.model.load_state_dict(state)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = cfg.model.eval().cuda()
+            self.postprocessor = cfg.postprocessor.eval().cuda()
+
+        def forward(self, images, orig_target_sizes):
+            outputs = self.model(images)
+            outputs = self.postprocessor(outputs, orig_target_sizes)
+            return outputs
+
+    model = Model()
+    img_size = cfg.yaml_cfg["eval_spatial_size"]
+    process_dataset(model, args.dataset, args.output, thrh=0.5, size=img_size)
+    # file_path = args.input
+    # if os.path.splitext(file_path)[-1].lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+    #     process_image(model, file_path)
+    #     print("Image processing complete.")
+    # else:
+    #     process_video(model, file_path)
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--config', type=str, required=True)
+    parser.add_argument('-r', '--resume', type=str, required=True)
+    parser.add_argument('-d', '--dataset', type=str, default='./data/fiftyone/validation/data')
+    parser.add_argument('-o', '--output', type=str, required=True, help="Path to save visualized results")
+    args = parser.parse_args()
+    main(args)

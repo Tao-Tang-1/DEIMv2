@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/wheat_train/deimv2_dinov3_s_wheat_train29
+output_dir: ./outputs/wheat_train/deimv2_dinov3_s_wheat_train39
 
 sync_bn: True
 find_unused_parameters: True
@@ -41,7 +41,7 @@ train_dataloader:
   type: DataLoader
   shuffle: True
   total_batch_size: 16
-  num_workers: 16
+  num_workers: 12
   drop_last: True
 
   dataset:
@@ -134,7 +134,7 @@ DINOv3STAs:
   interaction_indexes: [5, 8, 11]
   num_heads: 3
   finetune: True
-  conv_inplane: 16
+  conv_inplane: 64
   hidden_dim: 192
 
 HybridEncoder:
@@ -163,7 +163,7 @@ DEIMTransformer:
   hidden_dim: 192
   num_levels: 3
 
-  num_layers: 4
+  num_layers: 6
   eval_idx: -1
   num_queries: 300
 

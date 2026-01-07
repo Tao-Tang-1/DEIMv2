@@ -676,27 +676,67 @@ class DFINETransformer(nn.Module):
 
         return content, enc_topk_bbox_unact, enc_topk_bboxes_list, enc_topk_logits_list
 
-    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
-        if self.query_select_method == 'default':
-            _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+    # def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
+    #     if self.query_select_method == 'default':
+    #         _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+    #
+    #     elif self.query_select_method == 'one2many':
+    #         _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
+    #         topk_ind = topk_ind // self.num_classes
+    #
+    #     elif self.query_select_method == 'agnostic':
+    #         _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
+    #
+    #     topk_ind: torch.Tensor
+    #
+    #     topk_anchors = outputs_anchors_unact.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
+    #
+    #     topk_logits = outputs_logits.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
+    #
+    #     topk_memory = memory.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+    #
+    #     return topk_memory, topk_logits, topk_anchors
+    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
+                     topk: int):
+        # 1. 获取分类概率 (Sigmoid)
+        prob = outputs_logits.sigmoid()
 
-        elif self.query_select_method == 'one2many':
+        # 2. 获取分类分数 (每个 Query 的最高类别分)
+        if self.query_select_method == 'agnostic':
+            scores = prob.squeeze(-1)
+        else:
+            scores = prob.max(-1).values
+
+        # 3. 计算尺度因子 (大目标优化核心)
+        # 对于大目标数据集，我们要优先选择那些“长宽都很足”的 Query
+        anchors_sigmoid = outputs_anchors_unact.sigmoid()
+        wh = anchors_sigmoid[..., 2:]
+        # 计算面积的平方根作为尺度权重，让大目标更稳
+        scale_weight = torch.sqrt(wh[..., 0] * wh[..., 1])
+
+        # 4. 融合分数：将分类分数与尺度权重结合
+        # 加上 0.5 是为了平衡，不让尺度完全主导分类
+        # combined_scores = scores * (scale_weight + 0.5)
+        combined_scores = scores * (scale_weight + 0.5)
+
+        # 5. 根据不同的 method 选择 topk
+        if self.query_select_method == 'one2many':
+            # 训练时的辅助逻辑
             _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
             topk_ind = topk_ind // self.num_classes
+        else:
+            # 默认模式下，使用我们改进的对齐分数 combined_scores
+            _, topk_ind = torch.topk(combined_scores, topk, dim=-1)
 
-        elif self.query_select_method == 'agnostic':
-            _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
+        # --- 以下 Gather 逻辑保持不变 ---
+        topk_anchors = outputs_anchors_unact.gather(dim=1,index=topk_ind.unsqueeze(-1).repeat(1, 1,outputs_anchors_unact.shape[-1]))
 
-        topk_ind: torch.Tensor
+        topk_logits = outputs_logits.gather(dim=1,index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
 
-        topk_anchors = outputs_anchors_unact.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
-
-        topk_logits = outputs_logits.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
-
-        topk_memory = memory.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+        topk_memory = memory.gather(dim=1, index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
 
         return topk_memory, topk_logits, topk_anchors
 
