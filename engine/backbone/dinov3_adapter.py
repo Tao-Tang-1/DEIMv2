@@ -219,6 +219,12 @@ class DINOv3STAs(nn.Module):
         else:
             conv_inplane = 0
 
+        # 【新增改进：异构特征校准因子】
+        # 为每个尺度的拼接特征定义一个可学习的权重向量，初始化为 0.1 以稳定训练
+        self.gamma2 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 2) * 0.1)
+        self.gamma3 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 4) * 0.1)
+        self.gamma4 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 4) * 0.1)
+
         # linear projection
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
         self.convs = nn.ModuleList([
@@ -226,14 +232,6 @@ class DINOv3STAs(nn.Module):
             nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
             nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
         ])
-        # 【优化点】针对大目标，将融合卷积改为 3x3
-        # 3x3 卷积可以在融合 ViT 和 CNN 特征时提供更好的局部平滑，减少拼接带来的突变
-        # hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
-        # self.convs = nn.ModuleList([
-        #     nn.Conv2d(embed_dim + conv_inplane * 2, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
-        #     nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
-        #     nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False)
-        # ])
         # norm
         self.norms = nn.ModuleList([
             nn.SyncBatchNorm(hidden_dim),
@@ -268,15 +266,44 @@ class DINOv3STAs(nn.Module):
 
         # fusion
         fused_feats = []
-        if self.use_sta:
-            detail_feats = self.sta(x)
-            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
-        else:
-            fused_feats = sem_feats
+        # if self.use_sta:
+        #     detail_feats = self.sta(x)
+        #     for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+        #         fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+        # else:
+        #     fused_feats = sem_feats
+        #
+        # c2 = self.norms[0](self.convs[0](fused_feats[0]))
+        # c3 = self.norms[1](self.convs[1](fused_feats[1]))
+        # c4 = self.norms[2](self.convs[2](fused_feats[2]))
+        #
+        # return c2, c3, c4
 
-        c2 = self.norms[0](self.convs[0](fused_feats[0]))
-        c3 = self.norms[1](self.convs[1](fused_feats[1]))
-        c4 = self.norms[2](self.convs[2](fused_feats[2]))
+        # fusion 逻辑修改
+        fused_feats = []
+        if self.use_sta:
+            detail_feats = self.sta(x)  # 得到 c2, c3, c4
+
+            # 尺度 1 (1/8): 拼接并校准
+            f2 = torch.cat([sem_feats[0], detail_feats[0]], dim=1)
+            f2 = f2 * self.gamma2.view(1, -1, 1, 1)
+
+            # 尺度 2 (1/16): 拼接并校准
+            f3 = torch.cat([sem_feats[1], detail_feats[1]], dim=1)
+            f3 = f3 * self.gamma3.view(1, -1, 1, 1)
+
+            # 尺度 3 (1/32): 拼接并校准
+            f4 = torch.cat([sem_feats[2], detail_feats[2]], dim=1)
+            f4 = f4 * self.gamma4.view(1, -1, 1, 1)
+
+            # 映射并归一化
+            c2 = self.norms[0](self.convs[0](f2))
+            c3 = self.norms[1](self.convs[1](f3))
+            c4 = self.norms[2](self.convs[2](f4))
+        else:
+            # 如果不使用 sta，直接处理 sem_feats
+            c2 = self.norms[0](self.convs[0](sem_feats[0]))
+            c3 = self.norms[1](self.convs[1](sem_feats[1]))
+            c4 = self.norms[2](self.convs[2](sem_feats[2]))
 
         return c2, c3, c4
