@@ -22,50 +22,6 @@ from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
 
-# class LargeKernelSpatialPriorModule(nn.Module):
-#     def __init__(self, inplanes=16):
-#         super().__init__()
-#
-#         # 1/4
-#         self.stem = nn.Sequential(
-#             *[
-#                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#                 nn.SyncBatchNorm(inplanes),
-#                 nn.GELU(),
-#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-#             ]
-#         )
-#         # 1/8
-#         self.conv2 = nn.Sequential(
-#             *[
-#                 nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#                 nn.SyncBatchNorm(2 * inplanes),
-#             ]
-#         )
-#         # 1/16
-#         self.conv3 = nn.Sequential(
-#             *[
-#                 nn.GELU(),
-#                 nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#                 nn.SyncBatchNorm(4 * inplanes),
-#             ]
-#         )
-#         # 1/32
-#         self.conv4 = nn.Sequential(
-#             *[
-#                 nn.GELU(),
-#                 nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#                 nn.SyncBatchNorm(4 * inplanes),
-#             ]
-#         )
-#
-#     def forward(self, x):
-#         c1 = self.stem(x)
-#         c2 = self.conv2(c1)     # 1/8
-#         c3 = self.conv3(c2)     # 1/16
-#         c4 = self.conv4(c3)     # 1/32
-#
-#         return c2, c3, c4
 class LargeKernelSpatialPriorModule(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
@@ -80,33 +36,19 @@ class LargeKernelSpatialPriorModule(nn.Module):
             ]
         )
         # 1/8
-        # self.conv2 = nn.Sequential(
-        #     *[
-        #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-        #         nn.SyncBatchNorm(2 * inplanes),
-        #     ]
-        # )
-        # # 1/16
-        # self.conv3 = nn.Sequential(
-        #     *[
-        #         nn.GELU(),
-        #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-        #         nn.SyncBatchNorm(4 * inplanes),
-        #     ]
-        # )
-        ## 1/8
         self.conv2 = nn.Sequential(
-            nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-            # Depthwise conv
-            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
-            nn.SyncBatchNorm(2 * inplanes),
+            *[
+                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(2 * inplanes),
+            ]
         )
-
-        ## 1/16
+        # 1/16
         self.conv3 = nn.Sequential(
-            nn.GELU(),
-            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.SyncBatchNorm(4 * inplanes),
+            *[
+                nn.GELU(),
+                nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(4 * inplanes),
+            ]
         )
         # 1/32
         self.conv4 = nn.Sequential(
@@ -124,6 +66,64 @@ class LargeKernelSpatialPriorModule(nn.Module):
         c4 = self.conv4(c3)     # 1/32
 
         return c2, c3, c4
+# class LargeKernelSpatialPriorModule(nn.Module):
+#     def __init__(self, inplanes=16):
+#         super().__init__()
+#
+#         # 1/4
+#         self.stem = nn.Sequential(
+#             *[
+#                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(inplanes),
+#                 nn.GELU(),
+#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+#             ]
+#         )
+#         # 1/8
+#         # self.conv2 = nn.Sequential(
+#         #     *[
+#         #         nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#         #         nn.SyncBatchNorm(2 * inplanes),
+#         #     ]
+#         # )
+#         # # 1/16
+#         # self.conv3 = nn.Sequential(
+#         #     *[
+#         #         nn.GELU(),
+#         #         nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#         #         nn.SyncBatchNorm(4 * inplanes),
+#         #     ]
+#         # )
+#         ## 1/8
+#         self.conv2 = nn.Sequential(
+#             nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
+#             # Depthwise conv
+#             nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+#             nn.SyncBatchNorm(2 * inplanes),
+#         )
+#
+#         ## 1/16
+#         self.conv3 = nn.Sequential(
+#             nn.GELU(),
+#             nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+#             nn.SyncBatchNorm(4 * inplanes),
+#         )
+#         # 1/32
+#         self.conv4 = nn.Sequential(
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
+#         )
+#
+#     def forward(self, x):
+#         c1 = self.stem(x)
+#         c2 = self.conv2(c1)     # 1/8
+#         c3 = self.conv3(c2)     # 1/16
+#         c4 = self.conv4(c3)     # 1/32
+#
+#         return c2, c3, c4
 # class LargeKernelSpatialPriorModule(nn.Module):
 #     def __init__(self, inplanes=16):
 #         super().__init__()
@@ -221,9 +221,9 @@ class DINOv3STAs(nn.Module):
 
         # 【新增改进：异构特征校准因子】
         # 为每个尺度的拼接特征定义一个可学习的权重向量，初始化为 0.1 以稳定训练
-        self.gamma2 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 2) * 0.1)
-        self.gamma3 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 4) * 0.1)
-        self.gamma4 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 4) * 0.1)
+        # self.gamma2 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 2) * 0.1)
+        # self.gamma3 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 4) * 0.1)
+        # self.gamma4 = nn.Parameter(torch.ones(embed_dim + conv_inplane * 4) * 0.1)
 
         # linear projection
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
@@ -266,44 +266,44 @@ class DINOv3STAs(nn.Module):
 
         # fusion
         fused_feats = []
-        # if self.use_sta:
-        #     detail_feats = self.sta(x)
-        #     for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-        #         fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
-        # else:
-        #     fused_feats = sem_feats
-        #
-        # c2 = self.norms[0](self.convs[0](fused_feats[0]))
-        # c3 = self.norms[1](self.convs[1](fused_feats[1]))
-        # c4 = self.norms[2](self.convs[2](fused_feats[2]))
-        #
-        # return c2, c3, c4
+        if self.use_sta:
+            detail_feats = self.sta(x)
+            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+        else:
+            fused_feats = sem_feats
+
+        c2 = self.norms[0](self.convs[0](fused_feats[0]))
+        c3 = self.norms[1](self.convs[1](fused_feats[1]))
+        c4 = self.norms[2](self.convs[2](fused_feats[2]))
+
+        return c2, c3, c4
 
         # fusion 逻辑修改
-        fused_feats = []
-        if self.use_sta:
-            detail_feats = self.sta(x)  # 得到 c2, c3, c4
-
-            # 尺度 1 (1/8): 拼接并校准
-            f2 = torch.cat([sem_feats[0], detail_feats[0]], dim=1)
-            f2 = f2 * self.gamma2.view(1, -1, 1, 1)
-
-            # 尺度 2 (1/16): 拼接并校准
-            f3 = torch.cat([sem_feats[1], detail_feats[1]], dim=1)
-            f3 = f3 * self.gamma3.view(1, -1, 1, 1)
-
-            # 尺度 3 (1/32): 拼接并校准
-            f4 = torch.cat([sem_feats[2], detail_feats[2]], dim=1)
-            f4 = f4 * self.gamma4.view(1, -1, 1, 1)
-
-            # 映射并归一化
-            c2 = self.norms[0](self.convs[0](f2))
-            c3 = self.norms[1](self.convs[1](f3))
-            c4 = self.norms[2](self.convs[2](f4))
-        else:
-            # 如果不使用 sta，直接处理 sem_feats
-            c2 = self.norms[0](self.convs[0](sem_feats[0]))
-            c3 = self.norms[1](self.convs[1](sem_feats[1]))
-            c4 = self.norms[2](self.convs[2](sem_feats[2]))
+        # fused_feats = []
+        # if self.use_sta:
+        #     detail_feats = self.sta(x)  # 得到 c2, c3, c4
+        #
+        #     # 尺度 1 (1/8): 拼接并校准
+        #     f2 = torch.cat([sem_feats[0], detail_feats[0]], dim=1)
+        #     f2 = f2 * self.gamma2.view(1, -1, 1, 1)
+        #
+        #     # 尺度 2 (1/16): 拼接并校准
+        #     f3 = torch.cat([sem_feats[1], detail_feats[1]], dim=1)
+        #     f3 = f3 * self.gamma3.view(1, -1, 1, 1)
+        #
+        #     # 尺度 3 (1/32): 拼接并校准
+        #     f4 = torch.cat([sem_feats[2], detail_feats[2]], dim=1)
+        #     f4 = f4 * self.gamma4.view(1, -1, 1, 1)
+        #
+        #     # 映射并归一化
+        #     c2 = self.norms[0](self.convs[0](f2))
+        #     c3 = self.norms[1](self.convs[1](f3))
+        #     c4 = self.norms[2](self.convs[2](f4))
+        # else:
+        #     # 如果不使用 sta，直接处理 sem_feats
+        #     c2 = self.norms[0](self.convs[0](sem_feats[0]))
+        #     c3 = self.norms[1](self.convs[1](sem_feats[1]))
+        #     c4 = self.norms[2](self.convs[2](sem_feats[2]))
 
         return c2, c3, c4
