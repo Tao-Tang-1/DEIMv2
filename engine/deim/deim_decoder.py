@@ -498,27 +498,75 @@ class DEIMTransformer(nn.Module):
 
         return content, enc_topk_bbox_unact, enc_topk_bboxes_list, enc_topk_logits_list
 
-    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
-        if self.query_select_method == 'default':
-            _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+    # def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
+    #     if self.query_select_method == 'default':
+    #         _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+    #
+    #     elif self.query_select_method == 'one2many':
+    #         _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
+    #         topk_ind = topk_ind // self.num_classes
+    #
+    #     elif self.query_select_method == 'agnostic':
+    #         _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
+    #
+    #     topk_ind: torch.Tensor
+    #
+    #     topk_anchors = outputs_anchors_unact.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
+    #
+    #     topk_logits = outputs_logits.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
+    #
+    #     topk_memory = memory.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+    #
+    #     return topk_memory, topk_logits, topk_anchors
 
-        elif self.query_select_method == 'one2many':
-            _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
+    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
+                     topk: int):
+        # 1. 计算尺度权重 (Area-based Scale Weight)
+        # 将 logit 空间的 anchors 转为 [0, 1] 的 [cx, cy, w, h]
+        anchors_sigmoid = outputs_anchors_unact.sigmoid()
+        wh = anchors_sigmoid[..., 2:]
+
+        # 计算面积的平方根作为尺度因子。+0.5 是平滑项，防止小框分值归零，同时给大框加权。
+        # 对于冬小麦杂株这种大目标，这个权重能显著提升大框的优先级。
+        scale_weight = torch.sqrt(wh[..., 0] * wh[..., 1]) + 0.5  # 维度: [B, N]
+
+        # 2. 获取分类概率并应用尺度权重
+        prob = outputs_logits.sigmoid()
+        # 广播相乘: [B, N, Class] * [B, N, 1]
+        weighted_prob = prob * scale_weight.unsqueeze(-1)
+
+        # 3. 执行 Top-K 筛选
+        if self.query_select_method == 'one2many':
+            # 核心修改：在 one2many 模式下，使用加权后的概率进行 flatten 筛选
+            # 这确保了进入 Decoder 的 300 个 Query 更多是尺度合适且分类置信度高的候选
+            _, topk_ind = torch.topk(weighted_prob.flatten(1), topk, dim=-1)
             topk_ind = topk_ind // self.num_classes
 
+        elif self.query_select_method == 'default':
+            # 推理模式下：选择每个位置加权得分最高的类别
+            scores = weighted_prob.max(-1).values
+            _, topk_ind = torch.topk(scores, topk, dim=-1)
+
         elif self.query_select_method == 'agnostic':
-            _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
+            _, topk_ind = torch.topk(weighted_prob.squeeze(-1), topk, dim=-1)
 
+        # 4. 采集 (Gather) 逻辑保持不变
         topk_ind: torch.Tensor
-
         topk_anchors = outputs_anchors_unact.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
+                                                    index=topk_ind.unsqueeze(-1).repeat(1, 1,
+                                                                                        outputs_anchors_unact.shape[
+                                                                                            -1]))
 
+        # 注意：训练时返回原始的 logits 供 Criterion 计算损失，但索引是基于加权分选出来的
         topk_logits = outputs_logits.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
+                                            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[
+                                                -1])) if self.training else None
 
         topk_memory = memory.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+                                    index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
 
         return topk_memory, topk_logits, topk_anchors
 
