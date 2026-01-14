@@ -169,6 +169,30 @@ class LargeKernelSpatialPriorModule(nn.Module):
 #         c3 = self.conv3(c2)
 #         c4 = self.conv4(c3)
 #         return c2, c3, c4
+class LearnableFusion(nn.Module):
+    def __init__(self, in_channels_list, hidden_dim):
+        super().__init__()
+        # 为每个输入特征生成可学习权重
+        self.gates = nn.ModuleList([
+            nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),
+                nn.Conv2d(ch, ch, 1),  # 改成 ch 而不是 hidden_dim
+                nn.Sigmoid()
+            )
+            for ch in in_channels_list
+        ])
+        self.proj = nn.Conv2d(sum(in_channels_list), hidden_dim, kernel_size=1)
+
+    def forward(self, feats):
+        weighted_feats = []
+        for feat, gate in zip(feats, self.gates):
+            w = gate(feat)  # B x hidden_dim x 1 x 1
+            # resize to feat channels
+            w = F.interpolate(w, size=(feat.shape[2], feat.shape[3]), mode='nearest')
+            weighted_feats.append(feat * w)
+        fused = torch.cat(weighted_feats, dim=1)
+        fused = self.proj(fused)
+        return fused
 
 
 @register()
@@ -212,12 +236,26 @@ class DINOv3STAs(nn.Module):
 
         # init the feature pyramid
         self.use_sta = use_sta
+        # if use_sta:
+        #     print(f"Using Lite Spatial Prior Module with inplanes={conv_inplane}")
+        #     # self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
+        #     self.sta = LargeKernelSpatialPriorModule(inplanes=conv_inplane)
+        # else:
+        #     conv_inplane = 0
         if use_sta:
-            print(f"Using Lite Spatial Prior Module with inplanes={conv_inplane}")
-            # self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
             self.sta = LargeKernelSpatialPriorModule(inplanes=conv_inplane)
+            self.fusion = nn.ModuleList([
+                LearnableFusion([embed_dim, conv_inplane * 2], embed_dim + conv_inplane * 2),  # 320
+                LearnableFusion([embed_dim, conv_inplane * 4], embed_dim + conv_inplane * 4),  # 448
+                LearnableFusion([embed_dim, conv_inplane * 4], embed_dim + conv_inplane * 4),  # 448
+            ])
         else:
             conv_inplane = 0
+            self.fusion = nn.ModuleList([
+                LearnableFusion([embed_dim], hidden_dim),
+                LearnableFusion([embed_dim], hidden_dim),
+                LearnableFusion([embed_dim], hidden_dim),
+            ])
 
 
         # linear projection
@@ -260,13 +298,21 @@ class DINOv3STAs(nn.Module):
             sem_feats.append(sem_feat)
 
         # fusion
+        # fused_feats = []
+        # if self.use_sta:
+        #     detail_feats = self.sta(x)
+        #     for sem_feat, detail_feat in zip(sem_feats, detail_feats):
+        #         fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+        # else:
+        #     fused_feats = sem_feats
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
-            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+            for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
+                fused_feats.append(self.fusion[i]([sem_feat, detail_feat]))
         else:
-            fused_feats = sem_feats
+            for i, sem_feat in enumerate(sem_feats):
+                fused_feats.append(self.fusion[i]([sem_feat]))
 
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))

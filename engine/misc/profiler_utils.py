@@ -5,6 +5,30 @@ Copyright (c) 2024 The D-FINE Authors. All Rights Reserved.
 import copy
 from calflops import calculate_flops
 from typing import Tuple
+import calflops.pytorch_ops as ops
+
+def conv_flops_patch(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1, **kwargs):
+    B, C_in, H_in, W_in = input.shape
+    C_out, _, kH, kW = weight.shape
+
+    # 如果是 int，转换为 tuple
+    if isinstance(stride, int):
+        stride = (stride, stride)
+    if isinstance(padding, int):
+        padding = (padding, padding)
+    if isinstance(dilation, int):
+        dilation = (dilation, dilation)
+
+    H_out = (H_in + 2*padding[0] - dilation[0]*(kH-1) - 1)//stride[0] + 1
+    W_out = (W_in + 2*padding[1] - dilation[1]*(kW-1) - 1)//stride[1] + 1
+
+    flops = B * H_out * W_out * kH * kW * (C_in//groups) * C_out
+    if bias is not None:
+        flops += B * H_out * W_out * C_out
+    macs = flops // 2
+    return flops, macs
+
+ops._conv_flops_compute = conv_flops_patch
 
 def stats(
     cfg,

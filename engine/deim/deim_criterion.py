@@ -142,68 +142,25 @@ class DEIMCriterion(nn.Module):
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
 
-    # def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
-    #     """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
-    #        targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
-    #        The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
-    #     """
-    #     assert 'pred_boxes' in outputs
-    #     idx = self._get_src_permutation_idx(indices)
-    #     src_boxes = outputs['pred_boxes'][idx]
-    #     target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-    #     losses = {}
-    #     loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-    #     losses['loss_bbox'] = loss_bbox.sum() / num_boxes
-    #
-    #     loss_giou = 1 - torch.diag(generalized_box_iou(\
-    #         box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
-    #     loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
-    #     losses['loss_giou'] = loss_giou.sum() / num_boxes
-    #
-    #     return losses
-
-    def loss_boxes(self, outputs, targets, indices, num_boxes):
+    def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
+        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
-
         src_boxes = outputs['pred_boxes'][idx]
-        target_boxes = torch.cat(
-            [t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0
-        )
-
-        # -----------------------------
-        # ① 计算 GT area（你之前问的就在这）
-        # target_boxes 是 cx, cy, w, h（归一化）
-        # -----------------------------
-        tgt_wh = target_boxes[:, 2:]  # (w, h)
-        tgt_area = tgt_wh[:, 0] * tgt_wh[:, 1]  # ∈ (0, 1]
-
-        # -----------------------------
-        # ② 生成权重（稳妥，不炸梯度）
-        # -----------------------------
-        boxes_weight = tgt_area.sqrt().detach()
-        boxes_weight = boxes_weight / (boxes_weight.mean() + 1e-6)
-
-        # -----------------------------
-        # ③ L1 bbox loss（加权）
-        # -----------------------------
+        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        losses = {}
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-        loss_bbox = loss_bbox.sum(dim=1) * boxes_weight
-        loss_bbox = loss_bbox.sum() / num_boxes
+        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
 
-        # -----------------------------
-        # ④ GIoU loss（加权）
-        # -----------------------------
-        giou = generalized_box_iou(
-            box_cxcywh_to_xyxy(src_boxes),
-            box_cxcywh_to_xyxy(target_boxes)
-        )
-        loss_giou = (1 - torch.diag(giou)) * boxes_weight
-        loss_giou = loss_giou.sum() / num_boxes
+        loss_giou = 1 - torch.diag(generalized_box_iou(\
+            box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
+        loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
+        losses['loss_giou'] = loss_giou.sum() / num_boxes
 
-        return {
-            'loss_bbox': loss_bbox,
-            'loss_giou': loss_giou,
-        }
+        return losses
 
     def loss_local(self, outputs, targets, indices, num_boxes, T=5):
         """Compute Fine-Grained Localization (FGL) Loss
