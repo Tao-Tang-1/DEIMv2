@@ -135,3 +135,33 @@ class ConvertPILImage(T.Transform):
         inpt = Image(inpt)
 
         return inpt
+
+@register()
+class ExpandGTBoxes:
+    def __init__(self, scale=1.05):
+        self.scale = scale
+
+    def __call__(self, sample):
+        # sample = (image, target)
+        if not isinstance(sample, (tuple, list)) or len(sample) != 2:
+            return sample
+
+        image, target = sample
+
+        if target is None or "boxes" not in target:
+            return image, target
+
+        boxes = target["boxes"]
+        if boxes.numel() == 0:
+            return image, target
+
+        boxes = boxes.clone()
+
+        # 假设 boxes 是 cxcywh 且已归一化
+        boxes[:, 2:] *= self.scale
+
+        # 防止越界
+        boxes[:, 2:] = torch.clamp(boxes[:, 2:], min=1e-6, max=1.0)
+
+        target["boxes"] = boxes
+        return image, target
