@@ -22,7 +22,7 @@ from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
 
-# class LargeKernelSpatialPriorModule(nn.Module):
+# class SpatialPriorModulev2(nn.Module):
 #     def __init__(self, inplanes=16):
 #         super().__init__()
 #
@@ -66,22 +66,6 @@ from .dinov3 import DinoVisionTransformer
 #         c4 = self.conv4(c3)     # 1/32
 #
 #         return c2, c3, c4
-class LSSModule(nn.Module):
-    def __init__(self, kernel_size=7):
-        super(LSSModule, self).__init__()
-        # 针对大目标，建议使用较大的卷积核（如 7x7）来平滑显著性区域
-        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size // 2, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        # 1. 空间维度池化
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-
-        # 2. 拼接池化特征并生成显著性图
-        res = torch.cat([avg_out, max_out], dim=1)
-        res = self.conv(res)
-        return self.sigmoid(res)
 class LargeKernelSpatialPriorModule(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
@@ -140,52 +124,6 @@ class LargeKernelSpatialPriorModule(nn.Module):
         c4 = self.conv4(c3)     # 1/32
 
         return c2, c3, c4
-# class LargeKernelSpatialPriorModule(nn.Module):
-#     def __init__(self, inplanes=16):
-#         super().__init__()
-#
-#         # 1/4 - 保持不变
-#         self.stem = nn.Sequential(
-#             *[
-#                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-#                 nn.SyncBatchNorm(inplanes),
-#                 nn.GELU(),
-#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-#             ]
-#         )
-#
-#         # 1/8 - 保持 Large Kernel (7x7)
-#         self.conv2 = nn.Sequential(
-#             nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-#             nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),
-#             nn.SyncBatchNorm(2 * inplanes),
-#         )
-#
-#         # 1/16 - 【Exp 2 修改点】移除 Dilation
-#         # 原 padding=6 (dilation=2), 修改为 padding=3 (dilation=1)
-#         self.conv3 = nn.Sequential(
-#             nn.GELU(),
-#             nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2,
-#                       padding=3, dilation=1, bias=False), # 此处移除空洞
-#             nn.SyncBatchNorm(4 * inplanes),
-#         )
-#
-#         # 1/32 - 【Exp 2 修改点】移除 Dilation
-#         # 原 padding=2 (dilation=2), 修改为 padding=1 (dilation=1)
-#         self.conv4 = nn.Sequential(
-#             nn.GELU(),
-#             nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2,
-#                       padding=1, dilation=1, bias=False), # 此处移除空洞
-#             nn.SyncBatchNorm(4 * inplanes),
-#         )
-#
-#     def forward(self, x):
-#         c1 = self.stem(x)
-#         c2 = self.conv2(c1)
-#         c3 = self.conv3(c2)
-#         c4 = self.conv4(c3)
-#         return c2, c3, c4
-
 
 @register()
 class DINOv3STAs(nn.Module):
@@ -249,7 +187,6 @@ class DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim),
             nn.SyncBatchNorm(hidden_dim)
         ])
-        self.lss = LSSModule(kernel_size=7)
 
     def forward(self, x):
         # Code for matching with oss
@@ -281,29 +218,12 @@ class DINOv3STAs(nn.Module):
         if self.use_sta:
             detail_feats = self.sta(x)
             for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                # 拼接特征
-                fused = torch.cat([sem_feat, detail_feat], dim=1)
-                # LSS 增强
-                saliency_map = self.lss(fused)
-                fused = fused * saliency_map
-                fused_feats.append(fused)
+                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
         else:
             fused_feats = sem_feats
 
-        # --- 重点：修正后的 Top-Down 引导逻辑 (解决了维度不匹配和返回问题) ---
-
-        # 1. 计算最深层 c4 (投影到 hidden_dim)
+        c2 = self.norms[0](self.convs[0](fused_feats[0]))
+        c3 = self.norms[1](self.convs[1](fused_feats[1]))
         c4 = self.norms[2](self.convs[2](fused_feats[2]))
 
-        # 2. c4 引导 c3
-        c3_temp = self.norms[1](self.convs[1](fused_feats[1]))
-        # 确保 c4 上采样到 c3 的空间尺寸
-        c3 = c3_temp + F.interpolate(c4, size=c3_temp.shape[-2:], mode='bilinear', align_corners=False)
-
-        # 3. c3 引导 c2
-        c2_temp = self.norms[0](self.convs[0](fused_feats[0]))
-        # 确保 c3 上采样到 c2 的空间尺寸
-        c2 = c2_temp + F.interpolate(c3, size=c2_temp.shape[-2:], mode='bilinear', align_corners=False)
-
-        # 必须确保这一行存在且缩进在 forward 这一层级！
         return c2, c3, c4
