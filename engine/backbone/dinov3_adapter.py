@@ -66,6 +66,22 @@ from .dinov3 import DinoVisionTransformer
 #         c4 = self.conv4(c3)     # 1/32
 #
 #         return c2, c3, c4
+class LSSModule(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(LSSModule, self).__init__()
+        # 针对大目标，建议使用较大的卷积核（如 7x7）来平滑显著性区域
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 1. 空间维度池化
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+
+        # 2. 拼接池化特征并生成显著性图
+        res = torch.cat([avg_out, max_out], dim=1)
+        res = self.conv(res)
+        return self.sigmoid(res)
 class LargeKernelSpatialPriorModule(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
@@ -233,6 +249,7 @@ class DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim),
             nn.SyncBatchNorm(hidden_dim)
         ])
+        self.lss = LSSModule(kernel_size=7)
 
     def forward(self, x):
         # Code for matching with oss
@@ -264,12 +281,29 @@ class DINOv3STAs(nn.Module):
         if self.use_sta:
             detail_feats = self.sta(x)
             for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+                # 拼接特征
+                fused = torch.cat([sem_feat, detail_feat], dim=1)
+                # LSS 增强
+                saliency_map = self.lss(fused)
+                fused = fused * saliency_map
+                fused_feats.append(fused)
         else:
             fused_feats = sem_feats
 
-        c2 = self.norms[0](self.convs[0](fused_feats[0]))
-        c3 = self.norms[1](self.convs[1](fused_feats[1]))
+        # --- 重点：修正后的 Top-Down 引导逻辑 (解决了维度不匹配和返回问题) ---
+
+        # 1. 计算最深层 c4 (投影到 hidden_dim)
         c4 = self.norms[2](self.convs[2](fused_feats[2]))
 
+        # 2. c4 引导 c3
+        c3_temp = self.norms[1](self.convs[1](fused_feats[1]))
+        # 确保 c4 上采样到 c3 的空间尺寸
+        c3 = c3_temp + F.interpolate(c4, size=c3_temp.shape[-2:], mode='bilinear', align_corners=False)
+
+        # 3. c3 引导 c2
+        c2_temp = self.norms[0](self.convs[0](fused_feats[0]))
+        # 确保 c3 上采样到 c2 的空间尺寸
+        c2 = c2_temp + F.interpolate(c3, size=c2_temp.shape[-2:], mode='bilinear', align_corners=False)
+
+        # 必须确保这一行存在且缩进在 forward 这一层级！
         return c2, c3, c4
