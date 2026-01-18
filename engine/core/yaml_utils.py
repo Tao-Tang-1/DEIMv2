@@ -46,6 +46,31 @@ def load_config(file_path, cfg=dict()):
                 merge_dict(cfg, base_cfg)
 
     return merge_dict(cfg, file_cfg)
+# def load_config(file_path, cfg=dict()):
+#     """load config"""
+#     _, ext = os.path.splitext(file_path)
+#     assert ext in ['.yml', '.yaml'], "only support yaml files"
+#
+#     # ★ 修改点 1：明确使用 UTF-8
+#     with open(file_path, 'r', encoding='utf-8') as f:
+#         file_cfg = yaml.safe_load(f)
+#         if file_cfg is None:
+#             return {}
+#
+#     if INCLUDE_KEY in file_cfg:
+#         base_yamls = list(file_cfg[INCLUDE_KEY])
+#         for base_yaml in base_yamls:
+#             if base_yaml.startswith('~'):
+#                 base_yaml = os.path.expanduser(base_yaml)
+#
+#             if not base_yaml.startswith('/'):
+#                 base_yaml = os.path.join(os.path.dirname(file_path), base_yaml)
+#
+#             # ★ 修改点 2：include 的 yaml 也必须指定 encoding
+#             base_cfg = load_config(base_yaml, cfg)
+#             merge_dict(cfg, base_cfg)
+#
+#     return merge_dict(cfg, file_cfg)
 
 
 def merge_dict(dct, another_dct, inplace=True) -> Dict:

@@ -125,6 +125,22 @@ class LargeKernelSpatialPriorModule(nn.Module):
 
         return c2, c3, c4
 
+class FeatureAttention(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        # 针对融合后的总通道数进行加权
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(dim, dim // 4, 1, bias=False),
+            nn.GELU(),
+            nn.Conv2d(dim // 4, dim, 1, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        # 计算每个通道的权重并作用于输入
+        return x * self.fc(self.gap(x))
+
 @register()
 class DINOv3STAs(nn.Module):
     def __init__(
@@ -187,6 +203,16 @@ class DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim),
             nn.SyncBatchNorm(hidden_dim)
         ])
+        # 在初始化卷积层的地方同时初始化注意力层
+        # 通道数对应 fused_feats 的维度：
+        # scale 0: embed_dim + conv_inplane*2
+        # scale 1: embed_dim + conv_inplane*4
+        # scale 2: embed_dim + conv_inplane*4
+        self.attns = nn.ModuleList([
+            FeatureAttention(embed_dim + conv_inplane * 2),
+            FeatureAttention(embed_dim + conv_inplane * 4),
+            FeatureAttention(embed_dim + conv_inplane * 4)
+        ])
 
     def forward(self, x):
         # Code for matching with oss
@@ -214,14 +240,20 @@ class DINOv3STAs(nn.Module):
             sem_feats.append(sem_feat)
 
         # fusion
+        # --- 融合部分 ---
         fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
-            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
+            for i, (sem_feat, detail_feat) in enumerate(zip(sem_feats, detail_feats)):
+                # 1. 拼接
+                f = torch.cat([sem_feat, detail_feat], dim=1)
+                # 2. 加入注意力进行筛选 (新增)
+                f = self.attns[i](f)
+                fused_feats.append(f)
         else:
             fused_feats = sem_feats
 
+        # --- 降维投影部分 ---
         c2 = self.norms[0](self.convs[0](fused_feats[0]))
         c3 = self.norms[1](self.convs[1](fused_feats[1]))
         c4 = self.norms[2](self.convs[2](fused_feats[2]))
