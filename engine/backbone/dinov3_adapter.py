@@ -139,7 +139,23 @@ class FeatureAttention(nn.Module):
 
     def forward(self, x):
         # 计算每个通道的权重并作用于输入
-        return x * self.fc(self.gap(x))
+        # 将原有的 x * self.fc(...) 改为残差形式
+        # 这能确保基准特征流（Identity）不被破坏
+        return x + x * self.fc(self.gap(x))
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 基于通道维度的平均池化和最大池化
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        res = torch.cat([avg_out, max_out], dim=1)
+        res = self.sigmoid(self.conv(res))
+        return x * res
 
 @register()
 class DINOv3STAs(nn.Module):
@@ -214,6 +230,10 @@ class DINOv3STAs(nn.Module):
             FeatureAttention(embed_dim + conv_inplane * 4)
         ])
 
+        self.spatials = nn.ModuleList([
+            SpatialAttention(kernel_size=7) for _ in range(3)
+        ])
+
     def forward(self, x):
         # Code for matching with oss
         H_c, W_c = x.shape[2] // 16, x.shape[3] // 16
@@ -248,7 +268,8 @@ class DINOv3STAs(nn.Module):
                 # 1. 拼接
                 f = torch.cat([sem_feat, detail_feat], dim=1)
                 # 2. 加入注意力进行筛选 (新增)
-                f = self.attns[i](f)
+                f = self.attns[i](f)  # 通道注意力
+                f = self.spatials[i](f)  # 空间注意力 (可选尝试)
                 fused_feats.append(f)
         else:
             fused_feats = sem_feats
