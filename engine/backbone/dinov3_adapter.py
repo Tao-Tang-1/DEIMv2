@@ -22,7 +22,50 @@ from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
 
+class SpatialPriorModulev2(nn.Module):
+    def __init__(self, inplanes=16):
+        super().__init__()
 
+        # 1/4
+        self.stem = nn.Sequential(
+            *[
+                nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(inplanes),
+                nn.GELU(),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            ]
+        )
+        # 1/8
+        self.conv2 = nn.Sequential(
+            *[
+                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(2 * inplanes),
+            ]
+        )
+        # 1/16
+        self.conv3 = nn.Sequential(
+            *[
+                nn.GELU(),
+                nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(4 * inplanes),
+            ]
+        )
+        # 1/32
+        self.conv4 = nn.Sequential(
+            *[
+                nn.GELU(),
+                nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(4 * inplanes),
+            ]
+        )
+
+    def forward(self, x):
+        c1 = self.stem(x)
+        c2 = self.conv2(c1)     # 1/8
+        c3 = self.conv3(c2)     # 1/16
+        c4 = self.conv4(c3)     # 1/32
+
+        return c2, c3, c4
 # class LargeKernelSpatialPriorModule(nn.Module):
 #     def __init__(self, inplanes=16):
 #         super().__init__()
@@ -174,26 +217,26 @@ class DINOv3STAs(nn.Module):
         self.use_sta = use_sta
         if use_sta:
             print(f"Using Lite Spatial Prior Module with inplanes={conv_inplane}")
-            # self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
-            self.sta = LargeKernelSpatialPriorModule(inplanes=conv_inplane)
+            self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
+            # self.sta = LargeKernelSpatialPriorModule(inplanes=conv_inplane)
         else:
             conv_inplane = 0
 
         # linear projection
-        # hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
-        # self.convs = nn.ModuleList([
-        #     nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-        #     nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-        #     nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
-        # ])
-        # 【优化点】针对大目标，将融合卷积改为 3x3
-        # 3x3 卷积可以在融合 ViT 和 CNN 特征时提供更好的局部平滑，减少拼接带来的突变
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
         self.convs = nn.ModuleList([
-            nn.Conv2d(embed_dim + conv_inplane * 2, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False)
+            nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
         ])
+        # 【优化点】针对大目标，将融合卷积改为 3x3
+        # 3x3 卷积可以在融合 ViT 和 CNN 特征时提供更好的局部平滑，减少拼接带来的突变
+        # hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
+        # self.convs = nn.ModuleList([
+        #     nn.Conv2d(embed_dim + conv_inplane * 2, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
+        #     nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False),
+        #     nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False)
+        # ])
         # norm
         self.norms = nn.ModuleList([
             nn.SyncBatchNorm(hidden_dim),

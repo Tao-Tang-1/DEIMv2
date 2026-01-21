@@ -1,12 +1,12 @@
 __include__: [
-  '../dataset/custom_detection.yml',
+  '../dataset/wheat_detection.yml',
   '../runtime.yml',
   '../base/dataloader.yml',
   '../base/optimizer.yml',
   '../base/deimv2.yml',
 ]
 
-output_dir: ./outputs/deimv2_dinov3_s_coco
+output_dir: ./outputs/deimv2_dinov3_s_base
 
 DEIM:
   backbone: DINOv3STAs
@@ -15,7 +15,7 @@ DINOv3STAs:
   name: vit_tiny
   embed_dim: 192
   weights_path: ./ckpts/vitt_distill.pt
-  interaction_indexes: [5,8,11]   # only need the [1/8, 1/16, 1/32]
+  interaction_indexes: [3,7,11]   # only need the [1/8, 1/16, 1/32]
   num_heads: 3
 
 HybridEncoder:
@@ -57,10 +57,10 @@ optimizer:
   weight_decay: 0.0001
 
 # Increase to search for the optimal ema
-epoches: 120 # 120 + 4n
+epoches: 78 # 120 + 4n
 
 ## Our LR-Scheduler
-flat_epoch: 64    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
+flat_epoch: 37    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
 no_aug_epoch: 12
 
 ## Our DataAug
@@ -81,16 +81,16 @@ train_dataloader:
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
-        epoch: [4, 64, 120]   # list 
+        epoch: [4, 37, 66]   # list
 
   collate_fn:
     base_size: 640
     mixup_prob: 0.5
     ema_restart_decay: 0.9999
     base_size_repeat: 20
-    mixup_epochs: [4, 64]
-    stop_epoch: 120
-    copyblend_epochs: [4, 120]
+    mixup_epochs: [4, 37]
+    stop_epoch: 66
+    copyblend_epochs: [4, 66]
 
 val_dataloader:
   dataset:
@@ -105,4 +105,4 @@ DEIMCriterion:
     # change matcher
     change_matcher: True
     iou_order_alpha: 4.0
-    matcher_change_epoch: 100
+    matcher_change_epoch: 59
