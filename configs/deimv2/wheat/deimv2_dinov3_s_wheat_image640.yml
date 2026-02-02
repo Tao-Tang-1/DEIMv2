@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_DyT
+output_dir: ./outputs/wheat_train/deimv2_dinov3_s_wheat_image640
 
 sync_bn: True
 find_unused_parameters: True
@@ -40,14 +40,14 @@ remap_mscoco_category: False
 train_dataloader:
   type: DataLoader
   shuffle: True
-  total_batch_size: 16
-  num_workers: 12
+  total_batch_size: 32
+  num_workers: 4
   drop_last: True
 
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/train
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_train.json
+    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/tiles/images_640/train
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/tiles/annotations_640/annotations_train.json
     return_masks: False
     transforms:
       type: Compose
@@ -90,7 +90,7 @@ train_dataloader:
 val_dataloader:
   type: DataLoader
   shuffle: False
-  total_batch_size: 16
+  total_batch_size: 32
   num_workers: 2
   drop_last: False
   collate_fn:
@@ -98,11 +98,13 @@ val_dataloader:
 
   dataset:
     type: CocoDetection
-#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
-#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
-#测试集
     img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/tiles/images_640/val
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/tiles/annotations_640/annotations_val.json
+#测试集
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/tiles/images_640/test
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/tiles/annotations_640/annotations_test.json
     return_masks: False
     transforms:
       type: Compose
@@ -178,7 +180,7 @@ DEIMTransformer:
 
   num_points: [3, 6, 3]
   cross_attn_method: default
-  query_select_method: default
+  query_select_method: one2many
 
   activation: silu
   mlp_act: silu

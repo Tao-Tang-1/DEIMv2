@@ -21,7 +21,8 @@ from functools import partial
 from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
-from ..optim.DynamicTanh import LayerNorm2D_DyT
+from ..optim.DynamicTanh import replace_ln_with_dyt
+from ..optim.DynamicTanh import DynamicTanh
 
 class SpatialPriorModulev2(nn.Module):
     def __init__(self, inplanes=16):
@@ -68,48 +69,48 @@ class SpatialPriorModulev2(nn.Module):
 
         return c2, c3, c4
 class LargeKernelSpatialPriorModule(nn.Module):
-    def __init__(self, inplanes=16, use_dyt=True, alpha_init_value=0.7):
+    def __init__(self, inplanes=16):
         super().__init__()
-        self.use_dyt = use_dyt
-        self.alpha_init_value = alpha_init_value
 
         # 1/4
         self.stem = nn.Sequential(
-            nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-            LayerNorm2D_DyT(inplanes, use_dyt=use_dyt, alpha_init_value=alpha_init_value),
-            nn.GELU(),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            *[
+                nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(inplanes),
+                nn.GELU(),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            ]
         )
-
-        # 1/8
+        ## 1/8
         self.conv2 = nn.Sequential(
             nn.Conv2d(inplanes, inplanes, kernel_size=7, stride=2, padding=3, groups=inplanes, bias=False),
-            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),
-            LayerNorm2D_DyT(2*inplanes, use_dyt=use_dyt, alpha_init_value=alpha_init_value),
+            # Depthwise conv
+            nn.Conv2d(inplanes, 2 * inplanes, kernel_size=1, bias=False),  # Pointwise conv
+            nn.SyncBatchNorm(2 * inplanes),
         )
 
-        # 1/16
+        ## 1/16
         self.conv3 = nn.Sequential(
             nn.GELU(),
-            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, dilation=1, bias=False),
-            LayerNorm2D_DyT(4*inplanes, use_dyt=use_dyt, alpha_init_value=alpha_init_value),
+            nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.SyncBatchNorm(4 * inplanes),
         )
-
         # 1/32
         self.conv4 = nn.Sequential(
-            nn.GELU(),
-            nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, dilation=1, bias=False),
-            LayerNorm2D_DyT(4*inplanes, use_dyt=use_dyt, alpha_init_value=alpha_init_value),
+            *[
+                nn.GELU(),
+                nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+                nn.SyncBatchNorm(4 * inplanes),
+            ]
         )
 
     def forward(self, x):
         c1 = self.stem(x)
-        c2 = self.conv2(c1)
-        c3 = self.conv3(c2)
-        c4 = self.conv4(c3)
+        c2 = self.conv2(c1)     # 1/8
+        c3 = self.conv3(c2)     # 1/16
+        c4 = self.conv4(c3)     # 1/32
+
         return c2, c3, c4
-
-
 @register()
 class DINOv3STAs(nn.Module):
     def __init__(
@@ -141,6 +142,19 @@ class DINOv3STAs(nn.Module):
             else:
                 print('Training ViT-Tiny from scratch...')
 
+        # # ✅ 插入 DyT
+        # replace_ln_with_dyt(self.dinov3._model, alpha_init=0.5)
+        #只动 MLP 前的 norm2
+        # for blk in self.dinov3._model.blocks:
+        #     blk.norm2 = DynamicTanh(
+        #         normalized_shape=blk.norm2.normalized_shape,
+        #         channels_last=True,
+        #         alpha_init_value=0.05
+        #     )
+        #
+        # # ✅ 打印检查
+        # for i, blk in enumerate(self.dinov3._model.blocks):
+        #     print(f"Block {i}: norm1 = {type(blk.norm1).__name__}, norm2 = {type(blk.norm2).__name__}")
         embed_dim = self.dinov3.embed_dim
         self.interaction_indexes = interaction_indexes
         self.patch_size = patch_size
@@ -174,15 +188,10 @@ class DINOv3STAs(nn.Module):
             nn.Conv2d(embed_dim + conv_inplane * 4, hidden_dim, kernel_size=3, stride=1, padding=1, bias=False)
         ])
         # norm
-        # self.norms = nn.ModuleList([
-        #     nn.SyncBatchNorm(hidden_dim),
-        #     nn.SyncBatchNorm(hidden_dim),
-        #     nn.SyncBatchNorm(hidden_dim)
-        # ])
         self.norms = nn.ModuleList([
-            LayerNorm2D_DyT(hidden_dim, use_dyt=True, alpha_init_value=0.7),
-            LayerNorm2D_DyT(hidden_dim, use_dyt=True, alpha_init_value=0.7),
-            LayerNorm2D_DyT(hidden_dim, use_dyt=True, alpha_init_value=0.7)
+            nn.SyncBatchNorm(hidden_dim),
+            nn.SyncBatchNorm(hidden_dim),
+            nn.SyncBatchNorm(hidden_dim)
         ])
 
     def forward(self, x):

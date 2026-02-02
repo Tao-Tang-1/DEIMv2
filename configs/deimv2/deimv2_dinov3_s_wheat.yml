@@ -6,7 +6,7 @@ __include__: [
   '../base/deimv2.yml',
 ]
 
-output_dir: ./outputs/deimv2_dinov3_s_base
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_wheat_s3
 
 DEIM:
   backbone: DINOv3STAs
@@ -15,7 +15,7 @@ DINOv3STAs:
   name: vit_tiny
   embed_dim: 192
   weights_path: ./ckpts/vitt_distill.pt
-  interaction_indexes: [3,7,11]   # only need the [1/8, 1/16, 1/32]
+  interaction_indexes: [5,8,11]    # only need the [1/8, 1/16, 1/32]
   num_heads: 3
 
 HybridEncoder:

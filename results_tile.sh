@@ -1,0 +1,1 @@
+python tools/inference/torch_inf_tile_vis.py -c configs/deimv2/wheat/deimv2_dinov3_s_wheat_image640.yml -r outputs/wheat_train/deimv2_dinov3_s_wheat_image640/best_stg2.pth -d /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test -o results/tile640

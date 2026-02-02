@@ -28,8 +28,6 @@ from torch import nn
 
 from ..util.misc import NestedTensor
 from .position_encoding import build_position_encoding
-from .utils import LayerNorm2D
-from .utils import LayerNorm2D_DyT
 from .windows import WindowsWrapper
 
 logger = logging.getLogger("dinov3")
@@ -68,8 +66,7 @@ class DINOBackbone(nn.Module):
         embed_dims = [embed_dims[i] for i in range(n_all_layers) if i in blocks_to_take]
 
         if self.use_layernorm:
-            # self.layer_norms = nn.ModuleList([LayerNorm2D(embed_dim) for embed_dim in embed_dims])
-            self.layer_norms = nn.ModuleList([LayerNorm2D_DyT(embed_dim, use_dyt=True, alpha_init_value=0.7) for embed_dim in embed_dims])
+            self.layer_norms = nn.ModuleList([LayerNorm2D(embed_dim) for embed_dim in embed_dims])
 
         self.num_channels = [sum(embed_dims)]
         self.layers_to_use = layers_to_use
