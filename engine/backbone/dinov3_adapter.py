@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
+from torchvision.ops import deform_conv2d
 
 from functools import partial
 from ..core import register
@@ -145,16 +146,16 @@ class DINOv3STAs(nn.Module):
         # # ✅ 插入 DyT
         # replace_ln_with_dyt(self.dinov3._model, alpha_init=0.5)
         #只动 MLP 前的 norm2
-        # for blk in self.dinov3._model.blocks:
-        #     blk.norm2 = DynamicTanh(
-        #         normalized_shape=blk.norm2.normalized_shape,
-        #         channels_last=True,
-        #         alpha_init_value=0.05
-        #     )
-        #
-        # # ✅ 打印检查
-        # for i, blk in enumerate(self.dinov3._model.blocks):
-        #     print(f"Block {i}: norm1 = {type(blk.norm1).__name__}, norm2 = {type(blk.norm2).__name__}")
+        for blk in self.dinov3._model.blocks:
+            blk.norm2 = DynamicTanh(
+                normalized_shape=blk.norm2.normalized_shape,
+                channels_last=True,
+                alpha_init_value=0.05
+            )
+
+        # ✅ 打印检查
+        for i, blk in enumerate(self.dinov3._model.blocks):
+            print(f"Block {i}: norm1 = {type(blk.norm1).__name__}, norm2 = {type(blk.norm2).__name__}")
         embed_dim = self.dinov3.embed_dim
         self.interaction_indexes = interaction_indexes
         self.patch_size = patch_size
