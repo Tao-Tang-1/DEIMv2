@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC2
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC5
 
 sync_bn: True
 find_unused_parameters: True
@@ -41,7 +41,7 @@ train_dataloader:
   type: DataLoader
   shuffle: True
   total_batch_size: 32
-  num_workers: 4
+  num_workers: 12
   drop_last: True
 
   dataset:
@@ -98,11 +98,11 @@ val_dataloader:
 
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
 #测试集
-#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
-#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
+    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
     return_masks: False
     transforms:
       type: Compose
@@ -199,7 +199,7 @@ DEIMCriterion:
 
   matcher:
     type: HungarianMatcher
-    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
+    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2,cost_center: 0.8}
     alpha: 0.25
     gamma: 2.0
     change_matcher: True

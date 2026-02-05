@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_wheat_s_base
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_2
 
 sync_bn: True
 find_unused_parameters: True
@@ -131,7 +131,7 @@ DINOv3STAs:
   name: vit_tiny
   embed_dim: 192
   weights_path: ./ckpts/vitt_distill.pt
-  interaction_indexes: [3, 7, 11]
+  interaction_indexes: [5, 8, 11]
   num_heads: 3
   finetune: True
   conv_inplane: 16
