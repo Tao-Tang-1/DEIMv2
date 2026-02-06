@@ -162,6 +162,43 @@ class DEIMCriterion(nn.Module):
 
         return losses
 
+    #引入 DIoU 优化
+    # def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
+    #     assert 'pred_boxes' in outputs
+    #     idx = self._get_src_permutation_idx(indices)
+    #     src_boxes = outputs['pred_boxes'][idx]  # [cx, cy, w, h]
+    #     target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+    #
+    #     losses = {}
+    #     # L1 Loss 保持不变
+    #     loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+    #     losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+    #
+    #     # --- 创新修改：从 GIoU 升级为 DIoU 逻辑 ---
+    #     b1 = box_cxcywh_to_xyxy(src_boxes)
+    #     b2 = box_cxcywh_to_xyxy(target_boxes)
+    #
+    #     # 计算 IoU
+    #     ious = torch.diag(box_iou(b1, b2)[0])
+    #
+    #     # 计算最小外接矩形的对角线距离平方 (c2)
+    #     lt = torch.min(b1[:, :2], b2[:, :2])
+    #     rb = torch.max(b1[:, 2:], b2[:, 2:])
+    #     wh = (rb - lt).clamp(min=0)
+    #     c2 = (wh[:, 0] ** 2 + wh[:, 1] ** 2) + 1e-7
+    #
+    #     # 计算中心点距离平方 (d2)
+    #     d2 = (src_boxes[:, 0] - target_boxes[:, 0]) ** 2 + \
+    #          (src_boxes[:, 1] - target_boxes[:, 1]) ** 2
+    #
+    #     # DIoU = IoU - d2/c2
+    #     loss_diou = 1 - ious + (d2 / c2)
+    #
+    #     loss_diou = loss_diou if boxes_weight is None else loss_diou * boxes_weight
+    #     losses['loss_giou'] = loss_diou.sum() / num_boxes  # 沿用原 key 方便配置调用
+    #
+    #     return losses
+
     def loss_local(self, outputs, targets, indices, num_boxes, T=5):
         """Compute Fine-Grained Localization (FGL) Loss
             and Decoupled Distillation Focal (DDF) Loss. """

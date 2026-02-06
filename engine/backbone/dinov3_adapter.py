@@ -11,14 +11,9 @@ the terms of the DINOv3 License Agreement.
 """
 
 import os
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint as cp
-from torchvision.ops import deform_conv2d
-
-from functools import partial
 from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
@@ -76,7 +71,7 @@ def channel_shuffle(x, groups):
 
 
 @register()
-class DINOv3STAs(nn.Module):
+class CG_AFS_DINOv3STAs(nn.Module):
     def __init__(
             self,
             name=None,
@@ -90,24 +85,19 @@ class DINOv3STAs(nn.Module):
             conv_inplane=16,
             hidden_dim=None,
     ):
-        super(DINOv3STAs, self).__init__()
+        super(CG_AFS_DINOv3STAs, self).__init__()
 
-        # --- 恢复完整的权重加载逻辑 ---
+        # 1. 加载 Backbone 逻辑
         if 'dinov3' in name:
             self.dinov3 = DinoVisionTransformer(name=name)
             if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading DINOv3 ckpt from {weights_path}...')
                 self.dinov3.load_state_dict(torch.load(weights_path))
-            else:
-                print('Training DINOv3 from scratch...')
         else:
             self.dinov3 = VisionTransformer(embed_dim=embed_dim, num_heads=num_heads, return_layers=interaction_indexes)
             if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading ViT-Tiny ckpt from {weights_path}...')
-                # 注意这里原代码中的 ._model 访问
                 self.dinov3._model.load_state_dict(torch.load(weights_path))
-            else:
-                print('Training ViT-Tiny from scratch...')
 
         self.interaction_indexes = interaction_indexes
         self.patch_size = patch_size
@@ -117,27 +107,23 @@ class DINOv3STAs(nn.Module):
             self.dinov3.eval()
             self.dinov3.requires_grad_(False)
 
-        # --- 空间先验模块 (STA) ---
+        # 2. 初始化 STA
         self.use_sta = use_sta
         if use_sta:
-            print(f"Using Lite Spatial Prior with AFS Fusion, inplanes={conv_inplane}")
             self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
-
-            # 计算融合后的通道数 (ViT + CNN)
             c2_in = embed_dim + conv_inplane * 2
             c3_in = embed_dim + conv_inplane * 4
             c4_in = embed_dim + conv_inplane * 4
         else:
             c2_in = c3_in = c4_in = embed_dim
 
-        # --- 投影层与 Norm ---
+        # 3. 投影层
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
         self.convs = nn.ModuleList([
-            nn.Conv2d(c2_in, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(c3_in, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(c4_in, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            nn.Conv2d(c2_in, hidden_dim, kernel_size=1, bias=False),
+            nn.Conv2d(c3_in, hidden_dim, kernel_size=1, bias=False),
+            nn.Conv2d(c4_in, hidden_dim, kernel_size=1, bias=False)
         ])
-
         self.norms = nn.ModuleList([
             nn.SyncBatchNorm(hidden_dim),
             nn.SyncBatchNorm(hidden_dim),
@@ -145,10 +131,10 @@ class DINOv3STAs(nn.Module):
         ])
 
     def forward(self, x):
-        bs, C, h, w = x.shape
+        bs, _, h, w = x.shape
         H_c, W_c = h // 16, w // 16
 
-        # 提取 Vision Transformer 特征
+        # 提取 ViT 特征
         if len(self.interaction_indexes) > 0 and not isinstance(self.dinov3, VisionTransformer):
             all_layers = self.dinov3.get_intermediate_layers(x, n=self.interaction_indexes, return_class_token=True)
         else:
@@ -159,34 +145,31 @@ class DINOv3STAs(nn.Module):
 
         sem_feats = []
         num_scales = len(all_layers) - 2
-        for i, sem_feat in enumerate(all_layers):
-            feat, _ = sem_feat
-            # 还原空间维度 [B, D, H, W]
-            sem_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()
-            # 缩放至目标尺寸
+        for i, (feat, _) in enumerate(all_layers):
+            s_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()
             target_H, target_W = int(H_c * 2 ** (num_scales - i)), int(W_c * 2 ** (num_scales - i))
-            sem_feat = F.interpolate(sem_feat, size=[target_H, target_W], mode="bilinear", align_corners=False)
-            sem_feats.append(sem_feat)
+            s_feat = F.interpolate(s_feat, size=[target_H, target_W], mode="bilinear", align_corners=False)
+            sem_feats.append(s_feat)
 
-        # --- 创新：不对称洗牌融合 (AFS) ---
         if self.use_sta:
-            detail_feats = self.sta(x)  # 得到 c2, c3, c4
+            detail_feats = self.sta(x)  # c2, c3, c4
+            fused_outputs = []
 
-            # 依次处理三层特征
-            c2_fused = torch.cat([sem_feats[0], detail_feats[0]], dim=1)
-            c2_fused = channel_shuffle(c2_fused, groups=2)
-            c2 = self.norms[0](self.convs[0](c2_fused))
+            for i, (sem, det) in enumerate(zip(sem_feats, detail_feats)):
+                # --- [创新点：协同注意力门控 Collaborative Gating] ---
+                # 沿通道取均值，生成空间注意力图 (Spatial Mask)
+                # 无需额外参数，利用 ViT 的全局视野指导细节特征
+                mask = torch.sigmoid(sem.mean(dim=1, keepdim=True))
+                det_guided = det * mask
 
-            c3_fused = torch.cat([sem_feats[1], detail_feats[1]], dim=1)
-            c3_fused = channel_shuffle(c3_fused, groups=2)
-            c3 = self.norms[1](self.convs[1](c3_fused))
+                # --- [创新点：不对称特征洗牌 AFS] ---
+                fused = torch.cat([sem, det_guided], dim=1)
+                fused = channel_shuffle(fused, groups=2)
 
-            c4_fused = torch.cat([sem_feats[2], detail_feats[2]], dim=1)
-            c4_fused = channel_shuffle(c4_fused, groups=2)
-            c4 = self.norms[2](self.convs[2](c4_fused))
-        else:
-            c2 = self.norms[0](self.convs[0](sem_feats[0]))
-            c3 = self.norms[1](self.convs[1](sem_feats[1]))
-            c4 = self.norms[2](self.convs[2](sem_feats[2]))
+                # 投影与输出
+                out = self.norms[i](self.convs[i](fused))
+                fused_outputs.append(out)
 
-        return c2, c3, c4
+            return tuple(fused_outputs)
+
+        return [self.norms[i](self.convs[i](f)) for i, f in enumerate(sem_feats)]

@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_2
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_4
 
 sync_bn: True
 find_unused_parameters: True
@@ -123,11 +123,11 @@ eval_spatial_size: [640, 640]
 checkpoint_freq: 5
 
 DEIM:
-  backbone: DINOv3STAs
+  backbone: CG_AFS_DINOv3STAs
   encoder: HybridEncoder
   decoder: DEIMTransformer
 
-DINOv3STAs:
+CG_AFS_DINOv3STAs:
   name: vit_tiny
   embed_dim: 192
   weights_path: ./ckpts/vitt_distill.pt
