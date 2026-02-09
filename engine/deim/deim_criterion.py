@@ -79,6 +79,34 @@ class DEIMCriterion(nn.Module):
 
         return {'loss_focal': loss}
 
+    # def loss_labels_vfl(self, outputs, targets, indices, num_boxes, values=None):
+    #     assert 'pred_boxes' in outputs
+    #     idx = self._get_src_permutation_idx(indices)
+    #     if values is None:
+    #         src_boxes = outputs['pred_boxes'][idx]
+    #         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+    #         ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
+    #         ious = torch.diag(ious).detach()
+    #     else:
+    #         ious = values
+    #
+    #     src_logits = outputs['pred_logits']
+    #     target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+    #     target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+    #                                 dtype=torch.int64, device=src_logits.device)
+    #     target_classes[idx] = target_classes_o
+    #     target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
+    #
+    #     target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
+    #     target_score_o[idx] = ious.to(target_score_o.dtype)
+    #     target_score = target_score_o.unsqueeze(-1) * target
+    #
+    #     pred_score = F.sigmoid(src_logits).detach()
+    #     weight = self.alpha * pred_score.pow(self.gamma) * (1 - target) + target_score
+    #
+    #     loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
+    #     loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
+    #     return {'loss_vfl': loss}
     def loss_labels_vfl(self, outputs, targets, indices, num_boxes, values=None):
         assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
@@ -97,11 +125,18 @@ class DEIMCriterion(nn.Module):
         target_classes[idx] = target_classes_o
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
+        # --- 提点方案：IoU 质量校准增强 ---
+        # 针对 mAP50 冲刺：将 IoU 目标分值进行非线性放大
+        # 这样即便 IoU 刚过 0.5，模型也会被要求给出更高的分类置信度
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
-        target_score_o[idx] = ious.to(target_score_o.dtype)
+        # 使用根号 (power 0.5) 提升低 IoU 样本的目标权重
+        ious_boosted = torch.pow(ious.clamp(min=1e-6), 0.5)
+        target_score_o[idx] = ious_boosted.to(target_score_o.dtype)
         target_score = target_score_o.unsqueeze(-1) * target
 
         pred_score = F.sigmoid(src_logits).detach()
+
+        # 这里的 weight 逻辑保持 VFL 的特性：对负样本使用 focal 权重，对正样本使用 target_score
         weight = self.alpha * pred_score.pow(self.gamma) * (1 - target) + target_score
 
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
@@ -142,62 +177,60 @@ class DEIMCriterion(nn.Module):
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
 
+    # def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
+    #     """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+    #        targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+    #        The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+    #     """
+    #     assert 'pred_boxes' in outputs
+    #     idx = self._get_src_permutation_idx(indices)
+    #     src_boxes = outputs['pred_boxes'][idx]
+    #     target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+    #     losses = {}
+    #     loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+    #     losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+    #
+    #     loss_giou = 1 - torch.diag(generalized_box_iou(\
+    #         box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
+    #     loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
+    #     losses['loss_giou'] = loss_giou.sum() / num_boxes
+    #
+    #     return losses
+
+    #引入 DIoU 优化
     def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
-        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
-           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
-           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
-        """
         assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+
         losses = {}
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
 
-        loss_giou = 1 - torch.diag(generalized_box_iou(\
-            box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
-        loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
-        losses['loss_giou'] = loss_giou.sum() / num_boxes
+        # --- 优化后的 DIoU 计算 ---
+        b1 = box_cxcywh_to_xyxy(src_boxes)
+        b2 = box_cxcywh_to_xyxy(target_boxes)
+
+        ious = torch.diag(box_iou(b1, b2)[0])
+
+        # 最小外接矩形
+        lt = torch.min(b1[:, :2], b2[:, :2])
+        rb = torch.max(b1[:, 2:], b2[:, 2:])
+        wh = (rb - lt).clamp(min=0)
+        c2 = (wh[:, 0] ** 2 + wh[:, 1] ** 2) + 1e-7
+
+        # 中心点距离
+        d2 = (src_boxes[:, 0] - target_boxes[:, 0]) ** 2 + \
+             (src_boxes[:, 1] - target_boxes[:, 1]) ** 2
+
+        # 组合 Loss：DIoU 能在保持 AP95 的同时，通过中心点约束稳定 AP50
+        loss_diou = 1 - ious + (d2 / c2)
+
+        loss_diou = loss_diou if boxes_weight is None else loss_diou * boxes_weight
+        losses['loss_giou'] = loss_diou.sum() / num_boxes
 
         return losses
-
-    #引入 DIoU 优化
-    # def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
-    #     assert 'pred_boxes' in outputs
-    #     idx = self._get_src_permutation_idx(indices)
-    #     src_boxes = outputs['pred_boxes'][idx]  # [cx, cy, w, h]
-    #     target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-    #
-    #     losses = {}
-    #     # L1 Loss 保持不变
-    #     loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-    #     losses['loss_bbox'] = loss_bbox.sum() / num_boxes
-    #
-    #     # --- 创新修改：从 GIoU 升级为 DIoU 逻辑 ---
-    #     b1 = box_cxcywh_to_xyxy(src_boxes)
-    #     b2 = box_cxcywh_to_xyxy(target_boxes)
-    #
-    #     # 计算 IoU
-    #     ious = torch.diag(box_iou(b1, b2)[0])
-    #
-    #     # 计算最小外接矩形的对角线距离平方 (c2)
-    #     lt = torch.min(b1[:, :2], b2[:, :2])
-    #     rb = torch.max(b1[:, 2:], b2[:, 2:])
-    #     wh = (rb - lt).clamp(min=0)
-    #     c2 = (wh[:, 0] ** 2 + wh[:, 1] ** 2) + 1e-7
-    #
-    #     # 计算中心点距离平方 (d2)
-    #     d2 = (src_boxes[:, 0] - target_boxes[:, 0]) ** 2 + \
-    #          (src_boxes[:, 1] - target_boxes[:, 1]) ** 2
-    #
-    #     # DIoU = IoU - d2/c2
-    #     loss_diou = 1 - ious + (d2 / c2)
-    #
-    #     loss_diou = loss_diou if boxes_weight is None else loss_diou * boxes_weight
-    #     losses['loss_giou'] = loss_diou.sum() / num_boxes  # 沿用原 key 方便配置调用
-    #
-    #     return losses
 
     def loss_local(self, outputs, targets, indices, num_boxes, T=5):
         """Compute Fine-Grained Localization (FGL) Loss

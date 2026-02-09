@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_4
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_5
 
 sync_bn: True
 find_unused_parameters: True
@@ -201,7 +201,7 @@ DEIMCriterion:
     type: HungarianMatcher
     weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
     alpha: 0.25
-    gamma: 2.0
+    gamma: 1.5
     change_matcher: True
     iou_order_alpha: 4.0
     matcher_change_epoch: 100
