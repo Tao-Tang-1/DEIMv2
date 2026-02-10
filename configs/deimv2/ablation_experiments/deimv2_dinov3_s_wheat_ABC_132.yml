@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_5
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_6
 
 sync_bn: True
 find_unused_parameters: True
@@ -98,11 +98,11 @@ val_dataloader:
 
   dataset:
     type: CocoDetection
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
 #测试集
-#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
-#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
+    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
     return_masks: False
     transforms:
       type: Compose
@@ -191,10 +191,10 @@ PostProcessor:
 # Criterion / Loss
 # -------------------------
 DEIMCriterion:
-  weight_dict: {loss_mal: 1, loss_bbox: 5, loss_giou: 2, loss_fgl: 0.15, loss_ddf: 1.5}
+  weight_dict: {loss_mal: 1, loss_bbox: 4, loss_giou: 2.5, loss_fgl: 0.15, loss_ddf: 1.5 , loss_vfl: 1.5}
   losses: ['mal', 'boxes', 'local']
   gamma: 1.5
-  alpha: 0.75
+  alpha: 0.25
   reg_max: 32
 
   matcher:

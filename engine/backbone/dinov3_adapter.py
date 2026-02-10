@@ -152,24 +152,26 @@ class CG_AFS_DINOv3STAs(nn.Module):
             sem_feats.append(s_feat)
 
         if self.use_sta:
-            detail_feats = self.sta(x)  # c2, c3, c4
-            fused_outputs = []
-
+            detail_feats = self.sta(x)
+            final_outs = []
             for i, (sem, det) in enumerate(zip(sem_feats, detail_feats)):
-                # --- [创新点：协同注意力门控 Collaborative Gating] ---
-                # 沿通道取均值，生成空间注意力图 (Spatial Mask)
-                # 无需额外参数，利用 ViT 的全局视野指导细节特征
-                mask = torch.sigmoid(sem.mean(dim=1, keepdim=True))
-                det_guided = det * mask
+                # 改进：引入 Soft-Center Gating
+                # 相比 max 或 mean，使用自适应注意力权重能让大目标的特征更“纯”
+                # 计算通道注意力 (Squeeze-and-Excitation 思想)
+                avg_pool = torch.mean(sem, dim=(2, 3), keepdim=True)
+                channel_attn = torch.sigmoid(avg_pool)
+                sem = sem * channel_attn
 
-                # --- [创新点：不对称特征洗牌 AFS] ---
+                # 空间门控保持聚焦
+                spatial_mask = torch.sigmoid(torch.mean(sem, dim=1, keepdim=True))
+                det_guided = det * spatial_mask
+
+                # 融合并洗牌
                 fused = torch.cat([sem, det_guided], dim=1)
                 fused = channel_shuffle(fused, groups=2)
 
-                # 投影与输出
                 out = self.norms[i](self.convs[i](fused))
-                fused_outputs.append(out)
-
-            return tuple(fused_outputs)
+                final_outs.append(out)
+            return tuple(final_outs)
 
         return [self.norms[i](self.convs[i](f)) for i, f in enumerate(sem_feats)]

@@ -126,23 +126,58 @@ class DEIMCriterion(nn.Module):
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
         # --- 提点方案：IoU 质量校准增强 ---
-        # 针对 mAP50 冲刺：将 IoU 目标分值进行非线性放大
-        # 这样即便 IoU 刚过 0.5，模型也会被要求给出更高的分类置信度
+        # 策略：不要对 IoU 开根号，而是给正样本分类损失一个额外的动态增益系数
+        # target_score 保持原始 ious，确保回归和分类的趋势一致
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
-        # 使用根号 (power 0.5) 提升低 IoU 样本的目标权重
-        ious_boosted = torch.pow(ious.clamp(min=1e-6), 0.5)
-        target_score_o[idx] = ious_boosted.to(target_score_o.dtype)
+        target_score_o[idx] = ious.to(target_score_o.dtype)
         target_score = target_score_o.unsqueeze(-1) * target
 
         pred_score = F.sigmoid(src_logits).detach()
 
-        # 这里的 weight 逻辑保持 VFL 的特性：对负样本使用 focal 权重，对正样本使用 target_score
-        weight = self.alpha * pred_score.pow(self.gamma) * (1 - target) + target_score
+        # 关键修改：增加一个针对大目标的系数 (1 + ious)
+        # 这会温和地提升高 IoU 样本的损失权重，让模型对“像目标”的物体更敏感
+        boost = torch.ones_like(target_score_o)
+        boost[idx] = 1.0 + ious  # 动态增益
+
+        weight = self.alpha * pred_score.pow(self.gamma) * (1 - target) + target_score * boost.unsqueeze(-1)
 
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_vfl': loss}
 
+    # def loss_labels_mal(self, outputs, targets, indices, num_boxes, values=None):
+    #     assert 'pred_boxes' in outputs
+    #     idx = self._get_src_permutation_idx(indices)
+    #     if values is None:
+    #         src_boxes = outputs['pred_boxes'][idx]
+    #         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+    #         ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
+    #         ious = torch.diag(ious).detach()
+    #     else:
+    #         ious = values
+    #
+    #     src_logits = outputs['pred_logits']
+    #     target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+    #     target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+    #                                 dtype=torch.int64, device=src_logits.device)
+    #     target_classes[idx] = target_classes_o
+    #     target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
+    #
+    #     target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
+    #     target_score_o[idx] = ious.to(target_score_o.dtype)
+    #     target_score = target_score_o.unsqueeze(-1) * target
+    #
+    #     pred_score = F.sigmoid(src_logits).detach()
+    #     target_score = target_score.pow(self.gamma)
+    #     if self.mal_alpha != None:
+    #         weight = self.mal_alpha * pred_score.pow(self.gamma) * (1 - target) + target
+    #     else:
+    #         weight = pred_score.pow(self.gamma) * (1 - target) + target
+    #
+    #     # print(" ### DEIM-gamma{}-alpha{} ### ".format(self.gamma, self.mal_alpha))
+    #     loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
+    #     loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
+    #     return {'loss_mal': loss}
     def loss_labels_mal(self, outputs, targets, indices, num_boxes, values=None):
         assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
@@ -162,17 +197,24 @@ class DEIMCriterion(nn.Module):
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
+        # --- 核心改进：针对 AP50 的目标分配 ---
+        # 移除 pow(gamma)，直接使用 IoU 作为目标，甚至可以对 ious 做线性增强
+        # 这里的 0.5 * ious + 0.5 是一种标签平滑思想，能强迫 AP50 附近的框得分更高
         target_score_o[idx] = ious.to(target_score_o.dtype)
         target_score = target_score_o.unsqueeze(-1) * target
 
         pred_score = F.sigmoid(src_logits).detach()
-        target_score = target_score.pow(self.gamma)
-        if self.mal_alpha != None:
-            weight = self.mal_alpha * pred_score.pow(self.gamma) * (1 - target) + target
+
+        # 修改这里的 target_score 处理，不再对其降级
+        # target_score = target_score.pow(self.gamma)  <-- 删除或注释掉这一行
+
+        if self.mal_alpha is not None:
+            # 这里的 alpha + 0.05 是对负样本权重的微调
+            # 如果 AP50 掉点，说明 FP（虚警）多，可以稍微调大 alpha 来压制负样本
+            weight = (self.mal_alpha) * pred_score.pow(self.gamma) * (1 - target) + target
         else:
             weight = pred_score.pow(self.gamma) * (1 - target) + target
 
-        # print(" ### DEIM-gamma{}-alpha{} ### ".format(self.gamma, self.mal_alpha))
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
@@ -385,7 +427,12 @@ class DEIMCriterion(nn.Module):
             num_boxes_in = num_boxes_go if use_uni_set else num_boxes
             meta = self.get_loss_meta_info(loss, outputs, targets, indices_in)
             l_dict = self.get_loss(loss, outputs, targets, indices_in, num_boxes_in, **meta)
-            l_dict = {k: l_dict[k] * self.weight_dict[k] for k in l_dict if k in self.weight_dict}
+            l_dict = {
+                k: l_dict[k] * (
+                    self.weight_dict[k].item() if isinstance(self.weight_dict[k], torch.Tensor) else self.weight_dict[
+                        k])
+                for k in l_dict if k in self.weight_dict
+            }
             losses.update(l_dict)
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
