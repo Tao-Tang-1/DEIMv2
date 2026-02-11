@@ -184,6 +184,7 @@ class DEIMCriterion(nn.Module):
         if values is None:
             src_boxes = outputs['pred_boxes'][idx]
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            # 这里建议继续使用你已经调优好的 box_iou 或 diou 逻辑
             ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
             ious = torch.diag(ious).detach()
         else:
@@ -196,23 +197,25 @@ class DEIMCriterion(nn.Module):
         target_classes[idx] = target_classes_o
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
+        # --- 冲刺 0.92 的核心：Label Boosting ---
+        ious_o = ious.to(src_logits.dtype)
+
+        # 策略：只要 IoU > 0.5，我们就强制目标分数进入 0.9+ 高分段
+        # 这样能极大提升 PR 曲线在 0.5 阈值下的表现
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
-        # --- 核心改进：针对 AP50 的目标分配 ---
-        # 移除 pow(gamma)，直接使用 IoU 作为目标，甚至可以对 ious 做线性增强
-        # 这里的 0.5 * ious + 0.5 是一种标签平滑思想，能强迫 AP50 附近的框得分更高
-        target_score_o[idx] = ious.to(target_score_o.dtype)
+        boosted_target = torch.where(ious_o > 0.5, 0.9 + 0.1 * ious_o, ious_o)
+        target_score_o[idx] = boosted_target
         target_score = target_score_o.unsqueeze(-1) * target
 
         pred_score = F.sigmoid(src_logits).detach()
 
-        # 修改这里的 target_score 处理，不再对其降级
-        # target_score = target_score.pow(self.gamma)  <-- 删除或注释掉这一行
-
+        # 使用配置文件中的 gamma (1.5) 和 alpha (0.25)
+        # 对于冲刺 AP50，gamma 不宜过大，1.5 是很合适的平滑点
         if self.mal_alpha is not None:
-            # 这里的 alpha + 0.05 是对负样本权重的微调
-            # 如果 AP50 掉点，说明 FP（虚警）多，可以稍微调大 alpha 来压制负样本
-            weight = (self.mal_alpha) * pred_score.pow(self.gamma) * (1 - target) + target
+            # 增加正样本的权重贡献（直接加 1.0），同时利用 alpha 压制负样本
+            weight = self.mal_alpha * pred_score.pow(self.gamma) * (1 - target) + target
         else:
+            # 如果 mal_alpha 未定义，回退到标准 VFL 权重
             weight = pred_score.pow(self.gamma) * (1 - target) + target
 
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')

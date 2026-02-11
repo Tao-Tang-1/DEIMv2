@@ -537,49 +537,54 @@ class DEIMTransformer(nn.Module):
     def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
                      topk: int):
         # 1. 获取 sigmoid 后的值
-        anchors_sigmoid = outputs_anchors_unact.sigmoid()  # [B, N, 4] -> [cx, cy, w, h]
+        # [B, N, 4] -> [cx, cy, w, h]
+        anchors_sigmoid = outputs_anchors_unact.sigmoid()
         prob = outputs_logits.sigmoid()  # [B, N, Class]
 
-        # 2. 尺度权重 (Scale Weight) - 强化大目标
-        # 针对大目标，我们稍微加大面积权重的指数，从 sqrt 改为更平滑的系数
+        # 2. 尺度权重 (Scale Weight) - 针对大目标强化
         wh = anchors_sigmoid[..., 2:]
         area = wh[..., 0] * wh[..., 1]
-        scale_weight = torch.pow(area, 0.4)  # 使用 0.4 次幂，在鼓励大框的同时防止数值溢出
+        # 0.4 次幂能让大框优势显著，同时不至于让小框彻底消失（保持泛化性）
+        scale_weight = torch.pow(area, 0.4)
 
-        # 3. 中心权重 (Centerness Weight) - 核心创新
-        # 假设物体中心在 [0.5, 0.5]，计算 Query 距离图像中心的偏移
-        # 这一步能有效过滤掉边缘的无效虚警
+        # 3. 策略修正：如果你发现边缘目标丢了，可以注释掉下面这两行
+        # 计算 Query 距离图像中心的偏移，镇压边缘虚警
         center_dist = torch.sqrt((anchors_sigmoid[..., 0] - 0.5) ** 2 + (anchors_sigmoid[..., 1] - 0.5) ** 2)
-        center_weight = torch.exp(-center_dist)  # 距离中心越近，权重越高
+        center_weight = torch.exp(-center_dist)
 
         # 4. 融合得分
-        # 综合考虑：分类置信度 * 尺度权重 * 中心权重
-        # 对正样本类别取最大分值
         if self.query_select_method == 'agnostic':
+            # 类别无关模式
             scores = prob.squeeze(-1) * scale_weight * center_weight
         else:
+            # 正常模式：取最大类别概率 * 尺度权重 * 中心权重
             scores = prob.max(-1).values * scale_weight * center_weight
 
         # 5. 执行 Top-K 筛选
-        if self.query_select_method == 'one2many':
-            # 在训练时，one2many 模式下使用这个混合分进行筛选
-            _, topk_ind = torch.topk(scores, topk, dim=-1)
-        else:
-            _, topk_ind = torch.topk(scores, topk, dim=-1)
+        # 确保 topk 不超过总数 N
+        topk = min(topk, scores.shape[1])
+        _, topk_ind = torch.topk(scores, topk, dim=-1)
 
-        # 6. Gather 采集 (保持不变)
-        topk_ind: torch.Tensor
-        topk_anchors = outputs_anchors_unact.gather(dim=1, \
-                                                    index=topk_ind.unsqueeze(-1).repeat(1, 1,
-                                                                                        outputs_anchors_unact.shape[
-                                                                                            -1]))
+        # 6. Gather 采集 (加固维度对齐)
+        # 采集 Anchor
+        topk_anchors = outputs_anchors_unact.gather(
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_anchors_unact.shape[-1])
+        )
 
-        topk_logits = outputs_logits.gather(dim=1, \
-                                            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[
-                                                -1])) if self.training else None
+        # 采集 Logits (仅训练时需要)
+        topk_logits = None
+        if self.training:
+            topk_logits = outputs_logits.gather(
+                dim=1,
+                index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1])
+            )
 
-        topk_memory = memory.gather(dim=1, \
-                                    index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+        # 采集 Memory (Content Query)
+        topk_memory = memory.gather(
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, memory.shape[-1])
+        )
 
         return topk_memory, topk_logits, topk_anchors
 
