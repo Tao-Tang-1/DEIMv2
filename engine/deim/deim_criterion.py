@@ -181,43 +181,43 @@ class DEIMCriterion(nn.Module):
     def loss_labels_mal(self, outputs, targets, indices, num_boxes, values=None):
         assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
+
+        # 1. 计算 IoU
         if values is None:
             src_boxes = outputs['pred_boxes'][idx]
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            # 这里建议继续使用你已经调优好的 box_iou 或 diou 逻辑
+            # 建议此处确保使用的是 xyxy 格式计算 IoU
             ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
             ious = torch.diag(ious).detach()
         else:
             ious = values
 
         src_logits = outputs['pred_logits']
+
+        # 2. 生成 Target (One-Hot)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
+        # 转换为 one-hot，去掉背景类（最后一列）
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
-        # --- 冲刺 0.92 的核心：Label Boosting ---
-        ious_o = ious.to(src_logits.dtype)
-
-        # 策略：只要 IoU > 0.5，我们就强制目标分数进入 0.9+ 高分段
-        # 这样能极大提升 PR 曲线在 0.5 阈值下的表现
+        # 3. 策略 1: 更加丝滑的标签平滑 (Sigmoid 映射)
+        # 强制拉开正负样本差距：IoU > 0.6 的给高分，IoU < 0.5 的给极低分
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
-        boosted_target = torch.where(ious_o > 0.5, 0.9 + 0.1 * ious_o, ious_o)
-        target_score_o[idx] = boosted_target
+        boosted_ious = torch.sigmoid(15 * (ious.to(src_logits.dtype) - 0.6))
+        target_score_o[idx] = boosted_ious
         target_score = target_score_o.unsqueeze(-1) * target
 
+        # 4. 策略 2: 动态负样本抑制 (Dynamic Background Suppression)
         pred_score = F.sigmoid(src_logits).detach()
-
-        # 使用配置文件中的 gamma (1.5) 和 alpha (0.25)
-        # 对于冲刺 AP50，gamma 不宜过大，1.5 是很合适的平滑点
         if self.mal_alpha is not None:
-            # 增加正样本的权重贡献（直接加 1.0），同时利用 alpha 压制负样本
-            weight = self.mal_alpha * pred_score.pow(self.gamma) * (1 - target) + target
+            # 对背景 (1 - target) 部分施加 1.5 倍惩罚，强行压制虚警
+            weight = (self.mal_alpha * 1.5) * pred_score.pow(self.gamma) * (1 - target) + target
         else:
-            # 如果 mal_alpha 未定义，回退到标准 VFL 权重
             weight = pred_score.pow(self.gamma) * (1 - target) + target
 
+        # 5. 计算 BCE Loss
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
