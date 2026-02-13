@@ -182,11 +182,10 @@ class DEIMCriterion(nn.Module):
         assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
 
-        # 1. 计算 IoU
+        # 1. 计算 IoU (保持 detach 确保只优化分类)
         if values is None:
             src_boxes = outputs['pred_boxes'][idx]
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            # 建议此处确保使用的是 xyxy 格式计算 IoU
             ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
             ious = torch.diag(ious).detach()
         else:
@@ -199,20 +198,26 @@ class DEIMCriterion(nn.Module):
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
-        # 转换为 one-hot，去掉背景类（最后一列）
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
-        # 3. 策略 1: 更加丝滑的标签平滑 (Sigmoid 映射)
-        # 强制拉开正负样本差距：IoU > 0.6 的给高分，IoU < 0.5 的给极低分
+        # 3. 策略 1: 更加丝滑且陡峭的标签映射 (冲刺 0.92 关键点)
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
-        boosted_ious = torch.sigmoid(15 * (ious.to(src_logits.dtype) - 0.6))
+
+        # 【微调建议】：将 0.6 改为 0.55，将 15 改为 20
+        # 理由：mAP50 只要 IoU > 0.5 就是 TP。
+        # 把中心设在 0.55，意味着只要 IoU 稍微超过 0.5，分数就能立刻进入 0.7-0.9 的高分区
+        boosted_ious = torch.sigmoid(20 * (ious.to(src_logits.dtype) - 0.55))
+
+        # 增加一个小“死刑区”：IoU 极低 (<0.4) 的直接清零，不让它们干扰 top-k
+        boosted_ious = torch.where(ious < 0.4, torch.zeros_like(boosted_ious), boosted_ious)
+
         target_score_o[idx] = boosted_ious
         target_score = target_score_o.unsqueeze(-1) * target
 
-        # 4. 策略 2: 动态负样本抑制 (Dynamic Background Suppression)
+        # 4. 策略 2: 动态负样本抑制 (维持现状)
         pred_score = F.sigmoid(src_logits).detach()
         if self.mal_alpha is not None:
-            # 对背景 (1 - target) 部分施加 1.5 倍惩罚，强行压制虚警
+            # 1.5 倍惩罚非常精准
             weight = (self.mal_alpha * 1.5) * pred_score.pow(self.gamma) * (1 - target) + target
         else:
             weight = pred_score.pow(self.gamma) * (1 - target) + target
