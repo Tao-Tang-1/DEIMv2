@@ -179,51 +179,69 @@ class DEIMCriterion(nn.Module):
     #     loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
     #     return {'loss_mal': loss}
     def loss_labels_mal(self, outputs, targets, indices, num_boxes, values=None):
-        assert 'pred_boxes' in outputs
+        assert 'pred_logits' in outputs
         idx = self._get_src_permutation_idx(indices)
 
-        # 1. 计算 IoU (保持 detach 确保只优化分类)
+        src_logits = outputs['pred_logits']
+        dtype = src_logits.dtype
+        device = src_logits.device
+
+        # 1. IoU 计算 (保持类型对齐)
         if values is None:
             src_boxes = outputs['pred_boxes'][idx]
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
             ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
-            ious = torch.diag(ious).detach()
+            ious = torch.diag(ious).detach().to(dtype)
         else:
-            ious = values
-
-        src_logits = outputs['pred_logits']
+            ious = values.to(dtype)
 
         # 2. 生成 Target (One-Hot)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
-                                    dtype=torch.int64, device=src_logits.device)
+                                    dtype=torch.int64, device=device)
         target_classes[idx] = target_classes_o
-        target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
+        target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1].to(dtype)
 
-        # 3. 策略 1: 更加丝滑且陡峭的标签映射 (冲刺 0.92 关键点)
-        target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
+        # 3. 策略 1: 更加丝滑且陡峭的标签映射
+        # 中心点设为 0.52，确保 IoU=0.5 的样本也能拿到一定分值不至于被抛弃
+        target_score_o = torch.zeros(target_classes.shape, dtype=dtype, device=device)
+        boosted_ious = torch.sigmoid(25 * (ious - 0.52)).to(dtype)
 
-        # 【微调建议】：将 0.6 改为 0.55，将 15 改为 20
-        # 理由：mAP50 只要 IoU > 0.5 就是 TP。
-        # 把中心设在 0.55，意味着只要 IoU 稍微超过 0.5，分数就能立刻进入 0.7-0.9 的高分区
-        boosted_ious = torch.sigmoid(20 * (ious.to(src_logits.dtype) - 0.55))
-
-        # 增加一个小“死刑区”：IoU 极低 (<0.4) 的直接清零，不让它们干扰 top-k
-        boosted_ious = torch.where(ious < 0.4, torch.zeros_like(boosted_ious), boosted_ious)
+        # 低 IoU 过滤，防止低质样本干扰分类梯度
+        low_iou_mask = ious < 0.4
+        boosted_ious[low_iou_mask] = 0.0
 
         target_score_o[idx] = boosted_ious
         target_score = target_score_o.unsqueeze(-1) * target
 
-        # 4. 策略 2: 动态负样本抑制 (维持现状)
-        pred_score = F.sigmoid(src_logits).detach()
-        if self.mal_alpha is not None:
-            # 1.5 倍惩罚非常精准
-            weight = (self.mal_alpha * 1.5) * pred_score.pow(self.gamma) * (1 - target) + target
-        else:
-            weight = pred_score.pow(self.gamma) * (1 - target) + target
+        # 4. 策略 2: 动态权重计算
+        pred_score = torch.sigmoid(src_logits).detach()
+
+        # --- 修复开始：确保维度对齐 ---
+        # 初始化一个全零的 pos_weight，形状与 target 一致 [Batch, Queries, Classes]
+        pos_weight = torch.zeros_like(target)
+
+        # 仅在匹配到的位置 (idx) 填充 ious 的平方
+        # ious 形状为 [Matched_Boxes], target_classes_o 提供了对应的类别信息
+        # 我们需要将其广播到 one-hot 的形式
+        pos_weight[idx] = ious.pow(2).unsqueeze(-1) * target[idx]
+
+        # 负样本权重逻辑保持不变
+        neg_weight_factor = 2.5 if self.mal_alpha is None else (self.mal_alpha * 2.5)
+        neg_weight = (1 - target) * pred_score.pow(self.gamma) * neg_weight_factor
+
+        weight = pos_weight + neg_weight
 
         # 5. 计算 BCE Loss
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
+
+        # 【极致优化】：针对虚警 (False Positives) 的“死刑”逻辑
+        # 如果背景预测分 > 0.6，说明是顽固虚警，施加额外的 2.5 倍惩罚
+        # 这能强行改变排序，让真目标的置信度排到最前面
+        fp_strong_mask = (target == 0) & (torch.sigmoid(src_logits) > 0.6)
+        if fp_strong_mask.any():
+            loss[fp_strong_mask] *= 2.5
+
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
 
