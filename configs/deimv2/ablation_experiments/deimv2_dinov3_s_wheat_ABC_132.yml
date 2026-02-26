@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_11
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_12
 
 sync_bn: True
 find_unused_parameters: True
@@ -66,7 +66,7 @@ train_dataloader:
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
         name: stop_epoch
-        epoch: [4, 64, 90]
+        epoch: [4, 64, 120]
         ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
       mosaic_prob: 0.3
 
@@ -75,10 +75,10 @@ train_dataloader:
     # Mixup options
     mixup_prob: 0.5
     mixup_epochs: [4, 64]
-    stop_epoch: 90    # epoch in [72, ~) stop `multiscales`
+    stop_epoch: 120    # epoch in [72, ~) stop `multiscales`
     # CopyBlend options
     copyblend_prob: 0.5
-    copyblend_epochs: [4, 90]
+    copyblend_epochs: [4, 120]
     area_threshold: 100
     num_objects: 3
     with_expand: True
@@ -191,7 +191,7 @@ PostProcessor:
 # Criterion / Loss
 # -------------------------
 DEIMCriterion:
-  weight_dict: {loss_mal: 5.0, loss_bbox: 1.0, loss_giou: 1.0, loss_fgl: 0.15, loss_ddf: 1.5}
+  weight_dict: {loss_mal: 4.0, loss_bbox: 2.0, loss_giou: 1.5, loss_fgl: 0.15, loss_ddf: 1.5}
   losses: ['mal', 'boxes', 'local']
   gamma: 1.2
   alpha: 0.25
@@ -199,7 +199,7 @@ DEIMCriterion:
 
   matcher:
     type: HungarianMatcher
-    weight_dict: {cost_class: 5, cost_bbox: 4, cost_giou: 2}
+    weight_dict: {cost_class: 5, cost_bbox: 5, cost_giou: 2}
     alpha: 0.25
     gamma: 1.2
     change_matcher: True

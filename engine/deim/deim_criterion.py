@@ -202,13 +202,15 @@ class DEIMCriterion(nn.Module):
         target_classes[idx] = target_classes_o
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1].to(dtype)
 
-        # 3. 策略 1: 更加丝滑且陡峭的标签映射
-        # 中心点设为 0.52，确保 IoU=0.5 的样本也能拿到一定分值不至于被抛弃
+        # 3. 策略 1: 柔化映射曲线 (找回 Recall 的关键)
         target_score_o = torch.zeros(target_classes.shape, dtype=dtype, device=device)
-        boosted_ious = torch.sigmoid(25 * (ious - 0.52)).to(dtype)
 
-        # 低 IoU 过滤，防止低质样本干扰分类梯度
-        low_iou_mask = ious < 0.4
+        # 【调整点】：斜率由 25 降至 18，中心点由 0.52 移回 0.50
+        # 这样 IoU=0.5 的样本目标分约为 0.5，不再被判定为“低分样本”
+        boosted_ious = torch.sigmoid(18 * (ious - 0.50)).to(dtype)
+
+        # 【调整点】：死刑区由 0.4 放宽至 0.35，避免误杀边缘目标
+        low_iou_mask = ious < 0.35
         boosted_ious[low_iou_mask] = 0.0
 
         target_score_o[idx] = boosted_ious
@@ -217,17 +219,13 @@ class DEIMCriterion(nn.Module):
         # 4. 策略 2: 动态权重计算
         pred_score = torch.sigmoid(src_logits).detach()
 
-        # --- 修复开始：确保维度对齐 ---
-        # 初始化一个全零的 pos_weight，形状与 target 一致 [Batch, Queries, Classes]
+        # 初始化 pos_weight 矩阵
         pos_weight = torch.zeros_like(target)
-
-        # 仅在匹配到的位置 (idx) 填充 ious 的平方
-        # ious 形状为 [Matched_Boxes], target_classes_o 提供了对应的类别信息
-        # 我们需要将其广播到 one-hot 的形式
+        # 正样本激励：使用 IoU 的平方作为权重，让高 IoU 样本主导梯度
         pos_weight[idx] = ious.pow(2).unsqueeze(-1) * target[idx]
 
-        # 负样本权重逻辑保持不变
-        neg_weight_factor = 2.5 if self.mal_alpha is None else (self.mal_alpha * 2.5)
+        # 负样本抑制：维持较强的背景压制，但稍微下调系数至 2.0 (原 2.5)
+        neg_weight_factor = 2.0 if self.mal_alpha is None else (self.mal_alpha * 2.0)
         neg_weight = (1 - target) * pred_score.pow(self.gamma) * neg_weight_factor
 
         weight = pos_weight + neg_weight
@@ -235,12 +233,11 @@ class DEIMCriterion(nn.Module):
         # 5. 计算 BCE Loss
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
 
-        # 【极致优化】：针对虚警 (False Positives) 的“死刑”逻辑
-        # 如果背景预测分 > 0.6，说明是顽固虚警，施加额外的 2.5 倍惩罚
-        # 这能强行改变排序，让真目标的置信度排到最前面
-        fp_strong_mask = (target == 0) & (torch.sigmoid(src_logits) > 0.6)
+        # 6. 极致优化：FP (虚警) 惩罚
+        # 保持对高分背景的压制，但将触发阈值从 0.6 提高到 0.65，防止干扰 Recall
+        fp_strong_mask = (target == 0) & (torch.sigmoid(src_logits) > 0.65)
         if fp_strong_mask.any():
-            loss[fp_strong_mask] *= 2.5
+            loss[fp_strong_mask] *= 2.0  # 惩罚系数由 2.5 降至 2.0
 
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
