@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC5
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_wheat_s_base_78
 
 sync_bn: True
 find_unused_parameters: True
@@ -134,7 +134,7 @@ DINOv3STAs:
   interaction_indexes: [5, 8, 11]
   num_heads: 3
   finetune: True
-  conv_inplane: 64
+  conv_inplane: 16
   hidden_dim: 192
 
 HybridEncoder:
@@ -163,7 +163,7 @@ DEIMTransformer:
   hidden_dim: 192
   num_levels: 3
 
-  num_layers: 6
+  num_layers: 4
   eval_idx: -1
   num_queries: 300
 
