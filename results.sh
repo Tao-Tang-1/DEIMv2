@@ -1,1 +1,1 @@
-python tools/inference/torch_inf.py -c configs/deimv2/rice/deimv2_dinov3_x_rice_train_base_color.yml -r outputs/rice_train/deimv2_dinov3_x_rice_train_base_color/best_stg2.pth --input /tangquan/DatasetT/RiceHybrids/color_difference_2048_coco/images/test/DJI_20250911092549_0775_D.JPG --device cuda:0
+python tools/inference/torch_inf_vis.py -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_wheat_ABC.yml -r outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_8/best_stg2.pth -d /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test -o results/test1

@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_9
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_13
 
 sync_bn: True
 find_unused_parameters: True
@@ -98,11 +98,11 @@ val_dataloader:
 
   dataset:
     type: CocoDetection
-#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
-#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
+    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
 #测试集
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
     return_masks: False
     transforms:
       type: Compose
