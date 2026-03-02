@@ -319,29 +319,27 @@ class DEIMTransformer(nn.Module):
         self.pre_bbox_head = MLP(hidden_dim, hidden_dim, 4, 3, act=mlp_act)
         self.integral = Integral(self.reg_max)
 
-        self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
-        dec_score_head = nn.Linear(hidden_dim, num_classes)
-        self.dec_score_head = nn.ModuleList(
-            [dec_score_head if share_score_head else copy.deepcopy(dec_score_head) for _ in range(self.eval_idx + 1)]
-          + [copy.deepcopy(dec_score_head) for _ in range(num_layers - self.eval_idx - 1)])
-
-        # Share the same bbox head for all layers
-        dec_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max+1), 3, act=mlp_act)
-        self.dec_bbox_head = nn.ModuleList(
-            [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
-          + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
-        # shared_score_head = nn.Linear(hidden_dim, num_classes)
-        # shared_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max + 1), 3, act=mlp_act)
-        #
+        # self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
+        # dec_score_head = nn.Linear(hidden_dim, num_classes)
         # self.dec_score_head = nn.ModuleList(
-        #     [shared_score_head] * (num_layers // 2) +
-        #     [copy.deepcopy(shared_score_head) for _ in range(num_layers - num_layers // 2)]
-        # )
+        #     [dec_score_head if share_score_head else copy.deepcopy(dec_score_head) for _ in range(self.eval_idx + 1)]
+        #   + [copy.deepcopy(dec_score_head) for _ in range(num_layers - self.eval_idx - 1)])
         #
+        # # Share the same bbox head for all layers
+        # dec_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max+1), 3, act=mlp_act)
         # self.dec_bbox_head = nn.ModuleList(
-        #     [shared_bbox_head] * (num_layers // 2) +
-        #     [copy.deepcopy(shared_bbox_head) for _ in range(num_layers - num_layers // 2)]
-        # )
+        #     [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
+        #   + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
+        # --- 修改后 (共享参数) ---
+        self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
+
+        # 1. 显式定义共享的头
+        self.shared_dec_score_head = nn.Linear(hidden_dim, num_classes)
+        self.shared_dec_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max + 1), 3, act=mlp_act)
+
+        # 2. 将 ModuleList 替换为列表推导式，直接引用同一个实例，不使用 copy.deepcopy
+        self.dec_score_head = nn.ModuleList([self.shared_dec_score_head for _ in range(num_layers)])
+        self.dec_bbox_head = nn.ModuleList([self.shared_dec_bbox_head for _ in range(num_layers)])
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -370,11 +368,16 @@ class DEIMTransformer(nn.Module):
         init.constant_(self.pre_bbox_head.layers[-1].weight, 0)
         init.constant_(self.pre_bbox_head.layers[-1].bias, 0)
 
-        for cls_, reg_ in zip(self.dec_score_head, self.dec_bbox_head):
-            init.constant_(cls_.bias, bias)
-            if hasattr(reg_, 'layers'):
-                init.constant_(reg_.layers[-1].weight, 0)
-                init.constant_(reg_.layers[-1].bias, 0)
+        # for cls_, reg_ in zip(self.dec_score_head, self.dec_bbox_head):
+        #     init.constant_(cls_.bias, bias)
+        #     if hasattr(reg_, 'layers'):
+        #         init.constant_(reg_.layers[-1].weight, 0)
+        #         init.constant_(reg_.layers[-1].bias, 0)
+
+        ###修改后的共享Head
+        init.constant_(self.shared_dec_score_head.bias, bias)
+        init.constant_(self.shared_dec_bbox_head.layers[-1].weight, 0)
+        init.constant_(self.shared_dec_bbox_head.layers[-1].bias, 0)
 
         if self.learn_query_content:
             init.xavier_uniform_(self.tgt_embed.weight)

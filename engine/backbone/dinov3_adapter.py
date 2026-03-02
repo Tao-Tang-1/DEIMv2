@@ -18,6 +18,68 @@ from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
 
+def channel_shuffle(x, groups):
+    batchsize, num_channels, height, width = x.data.size()
+    channels_per_group = num_channels // groups
+    x = x.view(batchsize, groups, channels_per_group, height, width)
+    x = torch.transpose(x, 1, 2).contiguous()
+    return x.view(batchsize, -1, height, width)
+
+def depthwise_separable_conv(in_ch, out_ch, stride=1):
+    return nn.Sequential(
+        # Depthwise
+        nn.Conv2d(in_ch, in_ch, kernel_size=3, stride=stride, padding=1, groups=in_ch, bias=False),
+        nn.SyncBatchNorm(in_ch),
+        nn.GELU(),
+        # Pointwise
+        nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=1, padding=0, bias=False),
+        nn.SyncBatchNorm(out_ch),
+    )
+
+# class SpatialPriorModulev2(nn.Module):
+#     def __init__(self, inplanes=16):
+#         super().__init__()
+#
+#         # 1/4
+#         self.stem = nn.Sequential(
+#             *[
+#                 nn.Conv2d(3, inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(inplanes),
+#                 nn.GELU(),
+#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+#             ]
+#         )
+#         # 1/8
+#         self.conv2 = nn.Sequential(
+#             *[
+#                 nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(2 * inplanes),
+#             ]
+#         )
+#         # 1/16
+#         self.conv3 = nn.Sequential(
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
+#         )
+#         # 1/32
+#         self.conv4 = nn.Sequential(
+#             *[
+#                 nn.GELU(),
+#                 nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
+#                 nn.SyncBatchNorm(4 * inplanes),
+#             ]
+#         )
+#
+#     def forward(self, x):
+#         c1 = self.stem(x)
+#         c2 = self.conv2(c1)     # 1/8
+#         c3 = self.conv3(c2)     # 1/16
+#         c4 = self.conv4(c3)     # 1/32
+#
+#         return c2, c3, c4
 class SpatialPriorModulev2(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
@@ -32,27 +94,16 @@ class SpatialPriorModulev2(nn.Module):
             ]
         )
         # 1/8
-        self.conv2 = nn.Sequential(
-            *[
-                nn.Conv2d(inplanes, 2 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(2 * inplanes),
-            ]
-        )
+        self.conv2 = depthwise_separable_conv(inplanes, 2 * inplanes, stride=2)
         # 1/16
         self.conv3 = nn.Sequential(
-            *[
-                nn.GELU(),
-                nn.Conv2d(2 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(4 * inplanes),
-            ]
+            nn.GELU(),
+            depthwise_separable_conv(2 * inplanes, 4 * inplanes, stride=2)
         )
         # 1/32
         self.conv4 = nn.Sequential(
-            *[
-                nn.GELU(),
-                nn.Conv2d(4 * inplanes, 4 * inplanes, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.SyncBatchNorm(4 * inplanes),
-            ]
+            nn.GELU(),
+            depthwise_separable_conv(4 * inplanes, 4 * inplanes, stride=2)
         )
 
     def forward(self, x):
@@ -62,12 +113,6 @@ class SpatialPriorModulev2(nn.Module):
         c4 = self.conv4(c3)     # 1/32
 
         return c2, c3, c4
-def channel_shuffle(x, groups):
-    batchsize, num_channels, height, width = x.data.size()
-    channels_per_group = num_channels // groups
-    x = x.view(batchsize, groups, channels_per_group, height, width)
-    x = torch.transpose(x, 1, 2).contiguous()
-    return x.view(batchsize, -1, height, width)
 
 
 @register()

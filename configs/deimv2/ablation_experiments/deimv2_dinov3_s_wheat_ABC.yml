@@ -2,10 +2,10 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_78_13
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_78_16
 
 sync_bn: True
-find_unused_parameters: True
+find_unused_parameters: False
 
 use_amp: True
 scaler:
@@ -41,7 +41,7 @@ train_dataloader:
   type: DataLoader
   shuffle: True
   total_batch_size: 32
-  num_workers: 12
+  num_workers: 14
   drop_last: True
 
   dataset:
