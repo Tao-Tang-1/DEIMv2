@@ -56,7 +56,10 @@ def main(args, ):
     model = Model()
 
     img_size = cfg.yaml_cfg["eval_spatial_size"]
-    data = torch.rand(32, 3, *img_size)
+    # data = torch.rand(32, 3, *img_size)
+    # size = torch.tensor([img_size])
+    batch_size = 1  # ONNX 导出时用 1 或者任意 batch
+    data = torch.rand(batch_size, 3, *img_size)
     size = torch.tensor([img_size])
     _ = model(data, size)
 

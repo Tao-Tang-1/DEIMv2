@@ -2,7 +2,7 @@ import os
 import glob
 
 # 根目录
-root_dir = "/tangquan/code/DEIMv2/outputs/wheat_train"
+root_dir = "/tangquan/code/DEIMv2/outputs/ablation_experiments"
 
 # 需要保留、不删除的目录（绝对路径）
 exclude_dir = os.path.join(
@@ -11,7 +11,7 @@ exclude_dir = os.path.join(
 )
 
 # 匹配所有训练子目录
-train_dirs = glob.glob(os.path.join(root_dir, "deimv2_dinov3_s_wheat_train*"))
+train_dirs = glob.glob(os.path.join(root_dir, "deimv2_dinov3*"))
 
 total_deleted = 0
 

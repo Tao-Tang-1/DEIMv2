@@ -2,10 +2,10 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_78_16
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_78_19
 
 sync_bn: True
-find_unused_parameters: False
+find_unused_parameters: True
 
 use_amp: True
 scaler:
@@ -41,7 +41,8 @@ train_dataloader:
   type: DataLoader
   shuffle: True
   total_batch_size: 32
-  num_workers: 14
+  num_workers: 10
+  persistent_workers: True
   drop_last: True
 
   dataset:
@@ -53,7 +54,7 @@ train_dataloader:
       type: Compose
       ops:
         - {type: Mosaic, output_size: 320, rotation_range: 10, translation_range: [0.1,0.1], scaling_range: [0.5,1.5],
-           probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
+           probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 2000, random_pop: True}
         - {type: RandomPhotometricDistort, p: 0.5}
         - {type: RandomZoomOut, fill: 0}
         - {type: RandomIoUCrop, p: 0.8}
@@ -91,18 +92,18 @@ val_dataloader:
   type: DataLoader
   shuffle: False
   total_batch_size: 32
-  num_workers: 2
+  num_workers: 1
   drop_last: False
   collate_fn:
     type: BatchImageCollateFunction
 
   dataset:
     type: CocoDetection
-#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
-#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
+    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/val
+    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_val.json
 #测试集
-    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
-    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
+#    img_folder: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test
+#    ann_file: /tangquan/DatasetT/WheatzazhuCoCo/images_v1/annotations/annotations_test.json
     return_masks: False
     transforms:
       type: Compose
