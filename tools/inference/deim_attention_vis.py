@@ -1,116 +1,136 @@
 import os
 import sys
-
-# 1. 强制将 DEIMv2 项目根目录加入系统路径
-# 请确保这个路径指向包含 'engine' 文件夹的那个目录
-project_root = "/tangquan/code/DEIMv2"
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# 2. 现在再进行后续的导入，就不会报错了
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms as T
 import cv2
 import numpy as np
 from PIL import Image
-from engine.core import YAMLConfig  # 现在能找到了
+
+# --- 环境配置 ---
+project_root = "/zhangcc/tq/code/DEIMv2"
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from engine.core import YAMLConfig
 
 
-# --- 1. 采样点提取 Hook ---
-class DeformableAttentionHook:
+class DeformableRawHook:
     def __init__(self):
-        self.sampling_locations = None
-        self.attn_weights = None
+        self.query = None
+        self.ref_points = None
 
     def __call__(self, module, input, output):
-        # 在 DEIMv2 的 DeformableAttention 中，我们通常需要内部计算的采样位置
-        # 这里演示提取其权重和位置（具体的 key 需匹配模型内部变量名）
-        # 针对 DINO 系列，通常会在 forward 过程中通过 hook 截取
-        pass
+        self.query = input[0].detach()
+        self.ref_points = input[1].detach()
 
 
-def visualize_attention_on_image(model, config, img_path, output_path):
-    # 预处理
+def visualize_top_tier_blue(model, config, img_path, output_path):
     size = config.yaml_cfg["eval_spatial_size"]
     im_pil = Image.open(img_path).convert('RGB')
     w, h = im_pil.size
-    orig_size = torch.tensor([[w, h]]).cuda()
 
-    transforms = T.Compose([T.Resize(size), T.ToTensor()])
-    im_data = transforms(im_pil).unsqueeze(0).cuda()
+    img_tensor = T.Compose([T.Resize(size), T.ToTensor()])(im_pil).unsqueeze(0).cuda()
 
-    # 注册 Hook 到最后一层 Decoder 的 Cross Attention
-    # 根据你之前的层级打印，路径应为：model.model.decoder.decoder.layers[-1].cross_attn
-    # 如果报错，请检查 model 对象的嵌套层次
-    sampling_data = {}
+    hook = DeformableRawHook()
+    target_layer = model.decoder.decoder.layers[3].cross_attn
+    handle = target_layer.register_forward_hook(hook)
 
-    def hook_fn(module, input, output):
-        # 这里的 output 包含 sampling_locations 和 weights
-        # 格式取决于具体实现，通常是 tuple
-        sampling_data['locs'] = input[1] if len(input) > 1 else None
-        # 我们这里模拟从模型内部逻辑提取
-
-    target_layer = model.model.decoder.decoder.layers[-1].cross_attn
-    handle = target_layer.register_forward_hook(hook_fn)
-
-    # 推理
     with torch.no_grad():
-        # 这里调用 model.model 避开 postprocessor 拿到原始特征
-        outputs = model.model(im_data)
-
+        outputs = model(img_tensor)
     handle.remove()
 
-    # 获取最高分 Query
-    logits = outputs['pred_logits'].sigmoid()[0]
-    query_idx = logits[:, 0].argmax().item()
+    # --- 参数解析 ---
+    num_heads = target_layer.num_heads
+    num_levels = target_layer.num_levels
+    num_points_list = target_layer.num_points_list
+    offset_scale = target_layer.offset_scale
+    num_points_scale = target_layer.num_points_scale.to(img_tensor.dtype).unsqueeze(-1)
 
-    # 映射回原图并绘图
+    logits = outputs['pred_logits'].sigmoid()[0]
+    query_idx = logits.max(-1)[0].argmax().item()
+
+    q = hook.query[:, query_idx:query_idx + 1]
+    ref = hook.ref_points[:, query_idx:query_idx + 1]
+
+    with torch.no_grad():
+        sampling_offsets = target_layer.sampling_offsets(q).reshape(1, 1, num_heads, sum(num_points_list), 2)
+        attn_weights = target_layer.attention_weights(q).reshape(1, 1, num_heads, sum(num_points_list))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+
+    # 坐标计算
+    ref_xy = ref[:, :, None, :, :2]
+    ref_wh = ref[:, :, None, :, 2:]
+    offset = sampling_offsets * num_points_scale * ref_wh * offset_scale
+    sampling_locations = ref_xy + offset
+
+    # --- 绘图逻辑 (深蓝背景风格) ---
+    locs = sampling_locations[0, 0].cpu().numpy()
+    weights = attn_weights[0, 0].cpu().numpy()
     ori_cv = cv2.cvtColor(np.array(im_pil), cv2.COLOR_RGB2BGR)
 
-    # 获取参考点
-    ref_pts = outputs['reference_points'][0, query_idx].cpu().numpy()
-    rx, ry = int(ref_pts[0] * w), int(ref_pts[1] * h)
+    # 1. 创建深蓝色遮罩背景
+    # 创建一个纯深蓝色的层 (BGR: 40, 0, 0 左右是深蓝)
+    blue_mask = np.zeros_like(ori_cv)
+    blue_mask[:] = [45, 10, 5]  # 极深蓝色底
+    # 将原图调暗并与蓝色底融合，模仿热力图背景
+    canvas = cv2.addWeighted(ori_cv, 0.3, blue_mask, 0.7, 0)
 
-    # 绘制参考点（白色十字）
-    cv2.drawMarker(ori_cv, (rx, ry), (255, 255, 255), cv2.MARKER_CROSS, 20, 2)
+    flat_locs = locs.reshape(-1, 2)
+    flat_weights = weights.reshape(-1)
 
-    # 模拟多尺度采样点绘制 (由于 Hook 获取深层变量需要修改模型 forward，这里演示逻辑)
-    # 在论文中，你会展示不同层级的点
-    levels_colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255)]
-    for lvl in range(4):
-        for _ in range(4):  # 每个 level 采样 4 个点
-            offset = np.random.uniform(-0.05, 0.05, size=2)
-            px = int((ref_pts[0] + offset[0]) * w)
-            py = int((ref_pts[1] + offset[1]) * h)
-            cv2.circle(ori_cv, (px, py), 4, levels_colors[lvl], -1)
+    # 2. 指数增强：让权重差异更明显
+    enhanced_weights = np.power(flat_weights, 2)
+    norm_weights = (enhanced_weights / (enhanced_weights.max() + 1e-8) * 255).astype(np.uint8)
+    heatmap_colors = cv2.applyColorMap(np.arange(256).astype(np.uint8), cv2.COLORMAP_JET)
 
-    cv2.imwrite(output_path, ori_cv)
-    print(f"Attention Map 已保存至: {output_path}")
+    for i in range(len(flat_locs)):
+        px, py = int(flat_locs[i, 0] * w), int(flat_locs[i, 1] * h)
+        idx = norm_weights[i]
+        color = tuple(map(int, heatmap_colors[idx][0]))
+
+        if 0 <= px < w and 0 <= py < h:
+            # 过滤掉权重极低的点，保持画面干净
+            if idx > 25:
+                # 半径动态调整
+                r = max(2, int(np.sqrt(flat_weights[i] * 600)))
+                # 画发光点
+                cv2.circle(canvas, (px, py), r, color, -1)
+                # 核心高亮
+                if idx > 200:
+                    cv2.circle(canvas, (px, py), r, (255, 255, 255), 1)
+
+    # 3. 绘制“弱化版”引导框 (Journal Style)
+    box = outputs['pred_boxes'][0, query_idx].cpu().numpy()
+    cx, cy, bw, bh = box[0] * w, box[1] * h, box[2] * w, box[3] * h
+    x1, y1 = int(cx - bw / 2), int(cy - bh / 2)
+    x2, y2 = int(cx + bw / 2), int(cy + bh / 2)
+
+    # 使用极细的灰色半透明框，仅作为位置参考
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (200, 200, 200), 1)
+    canvas = cv2.addWeighted(overlay, 0.25, canvas, 0.75, 0)
+
+    cv2.imwrite(output_path, canvas)
+    print(f"【顶刊级蓝调对比图】已保存: {output_path}")
 
 
 def main():
-    # 这里直接套用你的初始化参数
-    config_path = "/tangquan/code/DEIMv2/configs/deimv2/ablation_experiments/deimv2_dinov3_s_wheat_ABC_132.yml"  # 举例，请替换实际路径
-    resume_path = "/tangquan/code/DEIMv2/outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_12/best_stg2.pth"
-    img_path = "/tangquan/DatasetT/WheatzazhuCoCo/images_v1/images/test/IMG_20250429_094610.jpg"
+    config_path = "/zhangcc/tq/code/DEIMv2/configs/deimv2/ablation_experiments/deimv2_dinov3_s_wheat_ABC_132.yml"
+    resume_path = "/zhangcc/tq/code/DEIMv2/outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_12/best_stg2.pth"
+    # img_path = "/zhangcc/tq/DataSet/WheatzazhuCoCo/images_v1/images/test/IMG_20250429_094610.jpg"
+    # img_path = "/zhangcc/tq/DataSet/WheatzazhuCoCo/images_v1/images/test/IMG_20250429_094921.jpg"
+    img_path = "/zhangcc/tq/DataSet/WheatzazhuCoCo/images_v1/images/test/IMG_20250429_095025.jpg"
 
     cfg = YAMLConfig(config_path, resume=resume_path)
+    model = cfg.model.eval().cuda()
+
     checkpoint = torch.load(resume_path, map_location='cpu')
     state = checkpoint['ema']['module'] if 'ema' in checkpoint else checkpoint['model']
-    cfg.model.load_state_dict(state)
+    model.load_state_dict(state)
 
-    class Model(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.model = cfg.model.eval().cuda()
-            self.postprocessor = cfg.postprocessor.eval().cuda()
-
-        def forward(self, images, orig_target_sizes=None):
-            return self.model(images)
-
-    model = Model()
-    visualize_attention_on_image(model, cfg, img_path, "deim_attention_result.jpg")
+    visualize_top_tier_blue(model, cfg, img_path, "deim_final_blue_contrast095025.jpg")
 
 
 if __name__ == '__main__':
