@@ -478,8 +478,18 @@ class DEIMTransformer(nn.Module):
         if self.training or self.eval_spatial_size is None:
             anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
         else:
-            anchors = self.anchors
-            valid_mask = self.valid_mask
+            # 核心：检查缓存的 anchor 数量是否与当前特征图 memory 匹配
+            if self.anchors.shape[1] != memory.shape[1]:
+                # 如果不匹配（比如从 640 变到了 800），实时生成匹配的分辨率
+                anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
+            else:
+                anchors = self.anchors
+                valid_mask = self.valid_mask
+        # if self.training or self.eval_spatial_size is None:
+        #     anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
+        # else:
+        #     anchors = self.anchors
+        #     valid_mask = self.valid_mask
         if memory.shape[0] > 1:
             anchors = anchors.repeat(memory.shape[0], 1, 1)
 
