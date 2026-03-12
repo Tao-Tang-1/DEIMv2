@@ -478,18 +478,8 @@ class DEIMTransformer(nn.Module):
         if self.training or self.eval_spatial_size is None:
             anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
         else:
-            # 核心：检查缓存的 anchor 数量是否与当前特征图 memory 匹配
-            if self.anchors.shape[1] != memory.shape[1]:
-                # 如果不匹配（比如从 640 变到了 800），实时生成匹配的分辨率
-                anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
-            else:
-                anchors = self.anchors
-                valid_mask = self.valid_mask
-        # if self.training or self.eval_spatial_size is None:
-        #     anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
-        # else:
-        #     anchors = self.anchors
-        #     valid_mask = self.valid_mask
+            anchors = self.anchors
+            valid_mask = self.valid_mask
         if memory.shape[0] > 1:
             anchors = anchors.repeat(memory.shape[0], 1, 1)
 
@@ -549,53 +539,55 @@ class DEIMTransformer(nn.Module):
 
     def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
                      topk: int):
-        # 1. 获取基础概率
+        # 1. 获取 sigmoid 后的值
+        # [B, N, 4] -> [cx, cy, w, h]
+        anchors_sigmoid = outputs_anchors_unact.sigmoid()
         prob = outputs_logits.sigmoid()  # [B, N, Class]
-        anchors_sigmoid = outputs_anchors_unact.sigmoid()  # [B, N, 4]
 
-        # 取最大类别的得分
-        conf_score = prob.max(-1).values  # [B, N]
-
-        # 2. 改进的尺度权重 (针对 640 分辨率优化)
-        # 在 640 下，小麦相对较小，原本的 0.4 次幂可能让虚警的大框权重过高
+        # 2. 尺度权重 (Scale Weight) - 针对大目标强化
         wh = anchors_sigmoid[..., 2:]
         area = wh[..., 0] * wh[..., 1]
-        # 将 area 权重降低到 0.2，或者加入一个截断，防止大面积背景虚警
-        scale_weight = torch.pow(area, 0.2)
+        # 0.4 次幂能让大框优势显著，同时不至于让小框彻底消失（保持泛化性）
+        scale_weight = torch.pow(area, 0.4)
 
-        # 3. 【新增】空间分布惩罚 (抑制过于集中的 Query)
-        # 小麦密集时，我们不希望前 300 个点全部挤在同一堆麦穗上
-        # 我们可以通过对 conf_score 进行简单的非线性变换，拉开高分和中分差距
-        conf_score = torch.pow(conf_score, 1.5)
+        # 3. 策略修正：如果你发现边缘目标丢了，可以注释掉下面这两行
+        # 计算 Query 距离图像中心的偏移，镇压边缘虚警
+        center_dist = torch.sqrt((anchors_sigmoid[..., 0] - 0.5) ** 2 + (anchors_sigmoid[..., 1] - 0.5) ** 2)
+        center_weight = torch.exp(-center_dist)
 
-        # 4. 最终得分融合
-        # 建议去掉 center_weight，因为小麦在全图分布很均匀，中心权重反而会抑制边缘的麦穗
+        # 4. 融合得分
         if self.query_select_method == 'agnostic':
-            scores = prob.squeeze(-1) * scale_weight
+            # 类别无关模式
+            scores = prob.squeeze(-1) * scale_weight * center_weight
         else:
-            # 核心公式：置信度是主导，面积是微调
-            scores = conf_score * scale_weight
+            # 正常模式：取最大类别概率 * 尺度权重 * 中心权重
+            scores = prob.max(-1).values * scale_weight * center_weight
 
-        # 5. 【关键手术】硬阈值过滤
-        # 在 640 分辨率下，如果一个点的初始置信度低于 0.05，直接将其分数归零
-        # 这样可以腾出 Top-K 的位置给那些真正有可能是目标的地方
-        scores = torch.where(conf_score > 0.05, scores, torch.zeros_like(scores))
-
-        # 6. 执行 Top-K 筛选
+        # 5. 执行 Top-K 筛选
+        # 确保 topk 不超过总数 N
         topk = min(topk, scores.shape[1])
         _, topk_ind = torch.topk(scores, topk, dim=-1)
 
-        # 7. Gather 采集 (保持原样)
+        # 6. Gather 采集 (加固维度对齐)
+        # 采集 Anchor
         topk_anchors = outputs_anchors_unact.gather(
-            dim=1, index=topk_ind.unsqueeze(-1).expand(-1, -1, 4))
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_anchors_unact.shape[-1])
+        )
 
+        # 采集 Logits (仅训练时需要)
         topk_logits = None
         if self.training:
             topk_logits = outputs_logits.gather(
-                dim=1, index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1]))
+                dim=1,
+                index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1])
+            )
 
+        # 采集 Memory (Content Query)
         topk_memory = memory.gather(
-            dim=1, index=topk_ind.unsqueeze(-1).expand(-1, -1, memory.shape[-1]))
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, memory.shape[-1])
+        )
 
         return topk_memory, topk_logits, topk_anchors
 

@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_78_22
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_78_23
 
 sync_bn: True
 find_unused_parameters: True
@@ -197,6 +197,10 @@ DEIMCriterion:
   gamma: 1.2
   alpha: 0.25
   reg_max: 32
+  aux_decay_start_epoch: 50  # 假设总计 100 epoch
+  aux_decay_step: 10
+  aux_decay_rate: 0.5        # 每次减半
+  min_aux_weight: 0.1        # 最终保留 10% 的辅助力，防止梯度完全断掉
 
   matcher:
     type: HungarianMatcher

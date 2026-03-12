@@ -31,6 +31,10 @@ class DEIMCriterion(nn.Module):
                  gamma=2.0,
                  num_classes=80,
                  reg_max=32,
+                 aux_decay_start_epoch=40,  # 新增：开始衰减的时间
+                 aux_decay_step=20,  # 新增：衰减步长
+                 aux_decay_rate=0.5,  # 新增：衰减比例
+                 min_aux_weight=0.1,  # 新增：最低保留权重
                  boxes_weight_format=None,
                  share_matched_indices=False,
                  mal_alpha=None,
@@ -51,6 +55,11 @@ class DEIMCriterion(nn.Module):
         # 内部缓存
         self.fgl_targets, self.fgl_targets_dn = None, None
         self.num_pos, self.num_neg = None, None
+
+        self.aux_decay_start_epoch = aux_decay_start_epoch
+        self.aux_decay_step = aux_decay_step
+        self.aux_decay_rate = aux_decay_rate
+        self.min_aux_weight = min_aux_weight
 
     # --------------------------------------------------------------------------
     # 核心损失函数修改
@@ -357,27 +366,48 @@ class DEIMCriterion(nn.Module):
             l_dict = self.get_loss(loss, outputs, targets, idx_in, n_in, **meta)
             losses.update({k: v * self.weight_dict[k] for k, v in l_dict.items() if k in self.weight_dict})
 
-        # Aux Layers
-        if 'aux_outputs' in outputs:
-            for i, aux_outputs in enumerate(outputs['aux_outputs']):
-                if 'local' in self.losses:
-                    aux_outputs['up'], aux_outputs['reg_scale'] = outputs['up'], outputs['reg_scale']
-                for loss in self.losses:
-                    use_uni = self.use_uni_set and (loss in ['boxes', 'local'])
-                    idx_in, n_in = (indices_go, num_boxes_go) if use_uni else (cached_indices[i], num_boxes)
-                    meta = self.get_loss_meta_info(loss, aux_outputs, targets, idx_in)
-                    l_dict = self.get_loss(loss, aux_outputs, targets, idx_in, n_in, **meta)
-                    losses.update({k + f'_aux_{i}': v * self.weight_dict[k] for k, v in l_dict.items() if k in self.weight_dict})
+            # ----------------------------------------------------------------------
+            # 创新点：辅助损失动态衰减逻辑
+            # 设定：从第 40 个 epoch 开始，辅助层权重每 20 个 epoch 衰减 0.5 倍
+            # 这样可以确保后期模型只关注主层，提升定位精度（AP75）
+            # ----------------------------------------------------------------------
+            aux_decay = 1.0
+            if epoch >= self.aux_decay_start_epoch:
+                # 计算已经过了多少个阶段
+                num_steps = (epoch - self.aux_decay_start_epoch) // self.aux_decay_step + 1
+                aux_decay = self.aux_decay_rate ** num_steps
+                aux_decay = max(aux_decay, self.min_aux_weight)
+            # ----------------------------------------------------------------------
 
-        # Encoder Aux
-        if 'enc_aux_outputs' in outputs:
-            for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
-                for loss in self.losses:
-                    use_uni = self.use_uni_set and (loss == 'boxes')
-                    idx_in, n_in = (indices_go, num_boxes_go) if use_uni else (cached_indices_enc[i], num_boxes)
-                    meta = self.get_loss_meta_info(loss, aux_outputs, targets, idx_in)
-                    l_dict = self.get_loss(loss, aux_outputs, targets, idx_in, n_in, **meta)
-                    losses.update({k + f'_enc_{i}': v * self.weight_dict[k] for k, v in l_dict.items() if k in self.weight_dict})
+            # Aux Layers 修改点
+            if 'aux_outputs' in outputs:
+                for i, aux_outputs in enumerate(outputs['aux_outputs']):
+                    if 'local' in self.losses:
+                        aux_outputs['up'], aux_outputs['reg_scale'] = outputs['up'], outputs['reg_scale']
+                    for loss in self.losses:
+                        use_uni = self.use_uni_set and (loss in ['boxes', 'local'])
+                        idx_in, n_in = (indices_go, num_boxes_go) if use_uni else (cached_indices[i], num_boxes)
+                        meta = self.get_loss_meta_info(loss, aux_outputs, targets, idx_in)
+                        l_dict = self.get_loss(loss, aux_outputs, targets, idx_in, n_in, **meta)
+
+                        # 修改这里：乘上 aux_decay
+                        for k, v in l_dict.items():
+                            if k in self.weight_dict:
+                                losses.update({k + f'_aux_{i}': v * self.weight_dict[k] * aux_decay})
+
+            # Encoder Aux 同理修改
+            if 'enc_aux_outputs' in outputs:
+                for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
+                    for loss in self.losses:
+                        use_uni = self.use_uni_set and (loss == 'boxes')
+                        idx_in, n_in = (indices_go, num_boxes_go) if use_uni else (cached_indices_enc[i], num_boxes)
+                        meta = self.get_loss_meta_info(loss, aux_outputs, targets, idx_in)
+                        l_dict = self.get_loss(loss, aux_outputs, targets, idx_in, n_in, **meta)
+
+                        # 修改这里：乘上 aux_decay (Encoder 的辅助损失通常衰减得更早)
+                        for k, v in l_dict.items():
+                            if k in self.weight_dict:
+                                losses.update({k + f'_enc_{i}': v * self.weight_dict[k] * aux_decay})
 
         # DN (Denoising)
         if 'dn_outputs' in outputs:
