@@ -119,38 +119,30 @@ class HungarianMatcher(nn.Module):
                 cost_class = -out_prob[:, tgt_ids]
 
             # Compute the L1 cost between boxes
-            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+            # cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+
+            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1).sqrt()
 
             # Compute the giou cost betwen boxes
             cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
-            #####增加
-            # -------------------------------
-            # center distance cost (anti-crowding)
-            # -------------------------------
-            # out_bbox, tgt_bbox: cx, cy, w, h in [0,1]
-
-            # out_centers = out_bbox[:, :2]  # (Nq, 2)
-            # tgt_centers = tgt_bbox[:, :2]  # (Ng, 2)
-            #
-            # cost_center = torch.cdist(
-            #     out_centers,
-            #     tgt_centers,
-            #     p=2
-            # )
-            #####增加
-
             # Final cost matrix 3 * self.cost_bbox + 2 * self.cost_class + self.cost_giou
-            C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+            # C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
 
-            #####增加
-            # C = (
-            #         self.cost_bbox * cost_bbox +
-            #         self.cost_class * cost_class +
-            #         self.cost_giou * cost_giou +
-            #         self.cost_center * cost_center
-            # )
-            #####增加
+            # IoU bonus (NEW)
+            bbox_iou, _ = box_iou(
+                box_cxcywh_to_xyxy(out_bbox),
+                box_cxcywh_to_xyxy(tgt_bbox)
+            )
+
+            # Final cost matrix (improved)
+            C = (
+                    self.cost_bbox * cost_bbox +
+                    self.cost_class * cost_class +
+                    self.cost_giou * cost_giou
+                    - 2.0 * bbox_iou
+            )
+
 
         C = C.view(bs, num_queries, -1).cpu()
 
