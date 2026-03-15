@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_13
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_25
 
 sync_bn: True
 find_unused_parameters: True
@@ -41,7 +41,7 @@ train_dataloader:
   type: DataLoader
   shuffle: True
   total_batch_size: 32
-  num_workers: 12
+  num_workers: 10
   drop_last: True
 
   dataset:
@@ -91,7 +91,7 @@ val_dataloader:
   type: DataLoader
   shuffle: False
   total_batch_size: 32
-  num_workers: 2
+  num_workers: 1
   drop_last: False
   collate_fn:
     type: BatchImageCollateFunction
@@ -167,7 +167,7 @@ DEIMTransformer:
   eval_idx: -1
   num_queries: 300
 
-  num_denoising: 100
+  num_denoising: 200
   label_noise_ratio: 0.5
 
   box_noise_scale: 1.0
@@ -191,7 +191,7 @@ PostProcessor:
 # Criterion / Loss
 # -------------------------
 DEIMCriterion:
-  weight_dict: {loss_mal: 3.0, loss_bbox: 1.5, loss_giou: 2.0, loss_fgl: 0.15, loss_ddf: 1.5}
+  weight_dict: {loss_mal: 2.5, loss_bbox: 6.0, loss_giou: 3.0, loss_fgl: 0.25, loss_ddf: 1.5}
   losses: ['mal', 'boxes', 'local']
   gamma: 1.2
   alpha: 0.25
@@ -199,12 +199,14 @@ DEIMCriterion:
 
   matcher:
     type: HungarianMatcher
-    weight_dict: {cost_class: 5, cost_bbox: 4, cost_giou: 2}
+    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
     alpha: 0.25
     gamma: 1.2
     change_matcher: True
-    iou_order_alpha: 4.0
-    matcher_change_epoch: 100
+    iou_order_alpha: 2.0
+#    iou_order_alpha: 4.0
+    matcher_change_epoch: 20
+#    matcher_change_epoch: 100
 
 # -------------------------
 # Optimizer (param groups + initial_lr)
