@@ -330,16 +330,20 @@ class DEIMTransformer(nn.Module):
         # self.dec_bbox_head = nn.ModuleList(
         #     [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
         #   + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
-        # --- 修改后 (共享参数) ---
+        # Decoder heads:
+        # keep the score head shared for stable classification across layers,
+        # but give each layer its own bbox head so box refinement can specialize
+        # per decoding stage.
         self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
 
-        # 1. 显式定义共享的头
         self.shared_dec_score_head = nn.Linear(hidden_dim, num_classes)
-        self.shared_dec_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max + 1), 3, act=mlp_act)
+        shared_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max + 1), 3, act=mlp_act)
 
-        # 2. 将 ModuleList 替换为列表推导式，直接引用同一个实例，不使用 copy.deepcopy
         self.dec_score_head = nn.ModuleList([self.shared_dec_score_head for _ in range(num_layers)])
-        self.dec_bbox_head = nn.ModuleList([self.shared_dec_bbox_head for _ in range(num_layers)])
+        self.dec_bbox_head = nn.ModuleList([
+            shared_bbox_head if share_bbox_head and i <= self.eval_idx else copy.deepcopy(shared_bbox_head)
+            for i in range(num_layers)
+        ])
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -374,10 +378,12 @@ class DEIMTransformer(nn.Module):
         #         init.constant_(reg_.layers[-1].weight, 0)
         #         init.constant_(reg_.layers[-1].bias, 0)
 
-        ###修改后的共享Head
+        # Shared score head init.
         init.constant_(self.shared_dec_score_head.bias, bias)
-        init.constant_(self.shared_dec_bbox_head.layers[-1].weight, 0)
-        init.constant_(self.shared_dec_bbox_head.layers[-1].bias, 0)
+        for reg_ in self.dec_bbox_head:
+            if hasattr(reg_, 'layers'):
+                init.constant_(reg_.layers[-1].weight, 0)
+                init.constant_(reg_.layers[-1].bias, 0)
 
         if self.learn_query_content:
             init.xavier_uniform_(self.tgt_embed.weight)
