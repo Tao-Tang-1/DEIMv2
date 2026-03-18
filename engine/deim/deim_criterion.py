@@ -119,7 +119,7 @@ class DEIMCriterion(nn.Module):
         target_score = target_score_o.unsqueeze(-1) * target
 
         # 动态背景抑制
-        bg_weight_factor = 1.5 if self.mal_alpha is None else self.mal_alpha
+        bg_weight_factor = 1.8 if self.mal_alpha is None else self.mal_alpha
         weight = bg_weight_factor * pred_scores_all.detach().pow(self.gamma) * (1 - target) + target
 
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
