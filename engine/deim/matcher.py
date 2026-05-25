@@ -43,10 +43,6 @@ class HungarianMatcher(nn.Module):
         self.cost_bbox = weight_dict['cost_bbox']
         self.cost_giou = weight_dict['cost_giou']
 
-        # ######增加
-        # self.cost_center = weight_dict.get('cost_center', 0.0)
-        # ######增加
-
         self.change_matcher = change_matcher
         self.iou_order_alpha = iou_order_alpha
         self.matcher_change_epoch = matcher_change_epoch
@@ -58,9 +54,6 @@ class HungarianMatcher(nn.Module):
         self.gamma = gamma
 
         assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0, "all costs cant be 0"
-        ######增加
-        # assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0 or self.cost_center != 0
-        ######增加
 
     @torch.no_grad()
     def forward(self, outputs: Dict[str, torch.Tensor], targets, return_topk=False, epoch=0):
@@ -119,30 +112,13 @@ class HungarianMatcher(nn.Module):
                 cost_class = -out_prob[:, tgt_ids]
 
             # Compute the L1 cost between boxes
-            # cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
-
-            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1).sqrt()
+            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
 
             # Compute the giou cost betwen boxes
             cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
             # Final cost matrix 3 * self.cost_bbox + 2 * self.cost_class + self.cost_giou
-            # C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
-
-            # IoU bonus (NEW)
-            bbox_iou, _ = box_iou(
-                box_cxcywh_to_xyxy(out_bbox),
-                box_cxcywh_to_xyxy(tgt_bbox)
-            )
-
-            # Final cost matrix (improved)
-            C = (
-                    self.cost_bbox * cost_bbox +
-                    self.cost_class * cost_class +
-                    self.cost_giou * cost_giou
-                    - 2.0 * bbox_iou
-            )
-
+            C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
 
         C = C.view(bs, num_queries, -1).cpu()
 

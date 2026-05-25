@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_offtype_base
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_offtype_base78
 
 sync_bn: True
 find_unused_parameters: True
@@ -19,7 +19,7 @@ ema:
   warmups: 1000
   start: 0
 
-epoches: 132
+epoches: 78
 clip_max_norm: 0.1
 
 # -------------------------
@@ -40,7 +40,7 @@ remap_mscoco_category: False
 train_dataloader:
   type: DataLoader
   shuffle: True
-  total_batch_size: 16
+  total_batch_size: 24
   num_workers: 8
   drop_last: True
 
@@ -66,7 +66,7 @@ train_dataloader:
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
         name: stop_epoch
-        epoch: [4, 64, 120]
+        epoch: [4, 37, 66]
         ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
       mosaic_prob: 0.5
 
@@ -74,11 +74,11 @@ train_dataloader:
     type: BatchImageCollateFunction
     # Mixup options
     mixup_prob: 0.5
-    mixup_epochs: [4, 64]
-    stop_epoch: 120    # epoch in [72, ~) stop `multiscales`
+    mixup_epochs: [4, 37]
+    stop_epoch: 66    # epoch in [72, ~) stop `multiscales`
     # CopyBlend options
     copyblend_prob: 0.5
-    copyblend_epochs: [4, 120]
+    copyblend_epochs: [4, 66]
     area_threshold: 100
     num_objects: 3
     with_expand: True
@@ -90,7 +90,7 @@ train_dataloader:
 val_dataloader:
   type: DataLoader
   shuffle: False
-  total_batch_size: 16
+  total_batch_size: 24
   num_workers: 2
   drop_last: False
   collate_fn:
@@ -252,7 +252,7 @@ lr_warmup_scheduler:
 lrsheduler: flatcosine
 lr_gamma: 0.5
 warmup_iter: 2000
-flat_epoch: 64    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
+flat_epoch: 37    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
 no_aug_epoch: 12
 
 # -------------------------
