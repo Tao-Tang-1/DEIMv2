@@ -24,7 +24,7 @@ trap cleanup EXIT
 # =========================
 
 CUDA_VISIBLE_DEVICES=0 torchrun train.py \
-    -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_wheat_s78.yml \
+    -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_offtype_ABC.yml \
     --use-amp --seed=0 2>&1 | tee "$LOGFILE"
 
 # 关键：获取 torchrun 的真实退出码
