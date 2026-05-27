@@ -80,6 +80,7 @@ def depthwise_separable_conv(in_ch, out_ch, stride=1):
 #         c4 = self.conv4(c3)     # 1/32
 #
 #         return c2, c3, c4
+
 class SpatialPriorModulev2(nn.Module):
     def __init__(self, inplanes=16):
         super().__init__()
