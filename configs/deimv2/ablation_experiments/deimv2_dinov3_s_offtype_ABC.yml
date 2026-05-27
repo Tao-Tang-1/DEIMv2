@@ -40,7 +40,7 @@ remap_mscoco_category: False
 train_dataloader:
   type: DataLoader
   shuffle: True
-  total_batch_size: 16
+  total_batch_size: 32
   num_workers: 10
   persistent_workers: True
   drop_last: True
@@ -53,14 +53,14 @@ train_dataloader:
     transforms:
       type: Compose
       ops:
-#        - {type: Mosaic, output_size: 320, rotation_range: 10, translation_range: [0.1,0.1], scaling_range: [0.5,1.5],
-#           probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
-#        - {type: RandomPhotometricDistort, p: 0.5}
+        - {type: Mosaic, output_size: 320, rotation_range: 10, translation_range: [0.1,0.1], scaling_range: [0.5,1.5],
+           probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
+        - {type: RandomPhotometricDistort, p: 0.5}
         - {type: RandomZoomOut, fill: 0}
         - {type: RandomIoUCrop, p: 0.8}
         - {type: SanitizeBoundingBoxes, min_size: 1}
         - {type: RandomHorizontalFlip}
-        - {type: Resize, size: [1024, 1024]}
+        - {type: Resize, size: [640, 640]}
         - {type: SanitizeBoundingBoxes, min_size: 1}
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485,0.456,0.406], std: [0.229,0.224,0.225]}
@@ -68,33 +68,16 @@ train_dataloader:
       policy:
         name: stop_epoch
         epoch: [4, 37, 66]
-        ops: ['RandomZoomOut', 'RandomIoUCrop']
-#        ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
-#      mosaic_prob: 0.3
+        ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+      mosaic_prob: 0.3
 
-#  collate_fn:
-#    type: BatchImageCollateFunction
-#    # Mixup options
-#    mixup_prob: 0.5
-#    mixup_epochs: [4, 37]
-#    stop_epoch: 66    # epoch in [72, ~) stop `multiscales`
-#    # CopyBlend options
-#    copyblend_prob: 0.5
-#    copyblend_epochs: [4, 66]
-#    area_threshold: 100
-#    num_objects: 3
-#    with_expand: True
-#    expand_ratios: [0.1, 0.25]
-#
-#    ema_restart_decay: 0.9999
-#    base_size_repeat: 3
   collate_fn:
     type: BatchImageCollateFunction
-    base_size: 1024
-    base_size_repeat: null
+    # Mixup options
     mixup_prob: 0.5
     mixup_epochs: [4, 37]
-    stop_epoch: 66
+    stop_epoch: 66    # epoch in [72, ~) stop `multiscales`
+    # CopyBlend options
     copyblend_prob: 0.5
     copyblend_epochs: [4, 66]
     area_threshold: 100
@@ -103,12 +86,13 @@ train_dataloader:
     expand_ratios: [0.1, 0.25]
 
     ema_restart_decay: 0.9999
+    base_size_repeat: 3
 
 val_dataloader:
   type: DataLoader
   shuffle: False
-  total_batch_size: 16
-  num_workers: 2
+  total_batch_size: 32
+  num_workers: 1
   drop_last: False
   collate_fn:
     type: BatchImageCollateFunction
@@ -124,7 +108,7 @@ val_dataloader:
     transforms:
       type: Compose
       ops:
-        - {type: Resize, size: [1024, 1024]}
+        - {type: Resize, size: [640, 640]}
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485,0.456,0.406], std: [0.229,0.224,0.225]}
 
@@ -136,7 +120,7 @@ criterion: DEIMCriterion
 postprocessor: PostProcessor
 
 use_focal_loss: True
-eval_spatial_size: [1024, 1024]
+eval_spatial_size: [640, 640]
 checkpoint_freq: 5
 
 DEIM:
