@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_CG_AFS_MAL_ASL
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_ablation_ABC_132_1
 
 sync_bn: True
 find_unused_parameters: True
@@ -19,7 +19,7 @@ ema:
   warmups: 1000
   start: 0
 
-epoches: 78
+epoches: 132
 clip_max_norm: 0.1
 
 # -------------------------
@@ -40,9 +40,8 @@ remap_mscoco_category: False
 train_dataloader:
   type: DataLoader
   shuffle: True
-  total_batch_size: 32
+  total_batch_size: 16
   num_workers: 10
-  persistent_workers: True
   drop_last: True
 
   dataset:
@@ -67,19 +66,19 @@ train_dataloader:
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
         name: stop_epoch
-        epoch: [4, 37, 66]
+        epoch: [4, 64, 120]
         ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
-      mosaic_prob: 0.5
+
 
   collate_fn:
     type: BatchImageCollateFunction
     # Mixup options
     mixup_prob: 0.5
-    mixup_epochs: [4, 37]
-    stop_epoch: 66    # epoch in [72, ~) stop `multiscales`
+    mixup_epochs: [4, 64]
+    stop_epoch: 120    # epoch in [72, ~) stop `multiscales`
     # CopyBlend options
     copyblend_prob: 0.5
-    copyblend_epochs: [4, 66]
+    copyblend_epochs: [4, 120]
     area_threshold: 100
     num_objects: 3
     with_expand: True
@@ -91,8 +90,8 @@ train_dataloader:
 val_dataloader:
   type: DataLoader
   shuffle: False
-  total_batch_size: 32
-  num_workers: 1
+  total_batch_size: 16
+  num_workers: 2
   drop_last: False
   collate_fn:
     type: BatchImageCollateFunction
@@ -168,7 +167,7 @@ DEIMTransformer:
   eval_idx: -1
   num_queries: 300
 
-  num_denoising: 100
+  num_denoising: 200
   label_noise_ratio: 0.5
 
   box_noise_scale: 1.0
@@ -192,7 +191,7 @@ PostProcessor:
 # Criterion / Loss
 # -------------------------
 DEIMCriterion:
-  weight_dict: {loss_mal: 2.0, loss_bbox: 5.0, loss_giou: 2.5, loss_fgl: 0.25, loss_ddf: 1.0}
+  weight_dict: {loss_mal: 2.5, loss_bbox: 6.0, loss_giou: 3.0, loss_fgl: 0.25, loss_ddf: 1.5}
   losses: ['mal', 'boxes', 'local']
   gamma: 1.2
   alpha: 0.25
@@ -204,8 +203,10 @@ DEIMCriterion:
     alpha: 0.25
     gamma: 1.2
     change_matcher: True
-    iou_order_alpha: 4.0
-    matcher_change_epoch: 59
+    iou_order_alpha: 2.0
+#    iou_order_alpha: 4.0
+    matcher_change_epoch: 20
+#    matcher_change_epoch: 100
 
 # -------------------------
 # Optimizer (param groups + initial_lr)
@@ -253,7 +254,7 @@ lr_warmup_scheduler:
 lrsheduler: flatcosine
 lr_gamma: 0.5
 warmup_iter: 2000
-flat_epoch: 37    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
+flat_epoch: 64    # 4 + epoch // 2, e.g., 40 = 4 + 72 / 2
 no_aug_epoch: 12
 
 # -------------------------

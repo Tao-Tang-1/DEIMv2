@@ -43,6 +43,10 @@ class HungarianMatcher(nn.Module):
         self.cost_bbox = weight_dict['cost_bbox']
         self.cost_giou = weight_dict['cost_giou']
 
+        # ######增加
+        # self.cost_center = weight_dict.get('cost_center', 0.0)
+        # ######增加
+
         self.change_matcher = change_matcher
         self.iou_order_alpha = iou_order_alpha
         self.matcher_change_epoch = matcher_change_epoch
@@ -54,6 +58,9 @@ class HungarianMatcher(nn.Module):
         self.gamma = gamma
 
         assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0, "all costs cant be 0"
+        ######增加
+        # assert self.cost_class != 0 or self.cost_bbox != 0 or self.cost_giou != 0 or self.cost_center != 0
+        ######增加
 
     @torch.no_grad()
     def forward(self, outputs: Dict[str, torch.Tensor], targets, return_topk=False, epoch=0):
@@ -117,8 +124,33 @@ class HungarianMatcher(nn.Module):
             # Compute the giou cost betwen boxes
             cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
+            #####增加
+            # -------------------------------
+            # center distance cost (anti-crowding)
+            # -------------------------------
+            # out_bbox, tgt_bbox: cx, cy, w, h in [0,1]
+
+            # out_centers = out_bbox[:, :2]  # (Nq, 2)
+            # tgt_centers = tgt_bbox[:, :2]  # (Ng, 2)
+            #
+            # cost_center = torch.cdist(
+            #     out_centers,
+            #     tgt_centers,
+            #     p=2
+            # )
+            #####增加
+
             # Final cost matrix 3 * self.cost_bbox + 2 * self.cost_class + self.cost_giou
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+
+            #####增加
+            # C = (
+            #         self.cost_bbox * cost_bbox +
+            #         self.cost_class * cost_class +
+            #         self.cost_giou * cost_giou +
+            #         self.cost_center * cost_center
+            # )
+            #####增加
 
         C = C.view(bs, num_queries, -1).cpu()
 
