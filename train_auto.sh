@@ -23,7 +23,7 @@ cleanup() {
 trap cleanup EXIT
 
 CUDA_VISIBLE_DEVICES=0 torchrun train.py \
-    -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_offtype_ABC_132.yml \
+    -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_offtype_ABC.yml \
     --use-amp --seed=0 2>&1 | tee "$LOGFILE"
 
 TRAIN_EXIT_CODE=${PIPESTATUS[0]}
