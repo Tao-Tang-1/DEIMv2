@@ -5,7 +5,7 @@ export OMP_NUM_THREADS=8
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 mkdir -p nohup_log
-LOGFILE=nohup_log/train_deimv2_dinov3_s_ablation_ABC_132_1_$(date +%Y%m%d_%H%M%S).log
+LOGFILE=nohup_log/deimv2_dinov3_s_offtype_ABC_78_3_$(date +%Y%m%d_%H%M%S).log
 
 TRAIN_EXIT_CODE=1
 
