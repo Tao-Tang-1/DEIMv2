@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_offtype_ABC_78_3
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_offtype_ABC_78_4
 
 sync_bn: True
 find_unused_parameters: True
@@ -132,7 +132,7 @@ CG_AFS_DINOv3STAs:
   name: vit_tiny
   embed_dim: 192
   weights_path: ./ckpts/vitt_distill.pt
-  interaction_indexes: [3, 7, 11]
+  interaction_indexes: [5, 8, 11]
   num_heads: 3
   finetune: True
   conv_inplane: 16
@@ -192,17 +192,17 @@ PostProcessor:
 # Criterion / Loss
 # -------------------------
 DEIMCriterion:
-  weight_dict: {loss_mal: 2.0, loss_bbox: 5.0, loss_giou: 2.5, loss_fgl: 0.25, loss_ddf: 1.0}
+  weight_dict: {loss_mal: 1, loss_bbox: 5, loss_giou: 2, loss_fgl: 0.15, loss_ddf: 1.5}
   losses: ['mal', 'boxes', 'local']
-  gamma: 1.2
-  alpha: 0.25
+  gamma: 1.5
+  alpha: 0.75
   reg_max: 32
 
   matcher:
     type: HungarianMatcher
-    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
+    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2,cost_center: 0.8}
     alpha: 0.25
-    gamma: 1.2
+    gamma: 2.0
     change_matcher: True
     iou_order_alpha: 4.0
     matcher_change_epoch: 59
