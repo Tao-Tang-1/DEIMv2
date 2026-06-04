@@ -11,17 +11,12 @@ the terms of the DINOv3 License Agreement.
 """
 
 import os
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint as cp
-
-from functools import partial
 from ..core import register
 from .vit_tiny import VisionTransformer
 from .dinov3 import DinoVisionTransformer
-
 
 class SpatialPriorModulev2(nn.Module):
     def __init__(self, inplanes=16):
@@ -67,63 +62,68 @@ class SpatialPriorModulev2(nn.Module):
         c4 = self.conv4(c3)     # 1/32
 
         return c2, c3, c4
+def channel_shuffle(x, groups):
+    batchsize, num_channels, height, width = x.data.size()
+    channels_per_group = num_channels // groups
+    x = x.view(batchsize, groups, channels_per_group, height, width)
+    x = torch.transpose(x, 1, 2).contiguous()
+    return x.view(batchsize, -1, height, width)
 
 
 @register()
-class DINOv3STAs(nn.Module):
+class CG_AFS_DINOv3STAs(nn.Module):
     def __init__(
-        self,
-        name=None,
-        weights_path=None,
-        interaction_indexes=[],
-        finetune=True,
-        embed_dim=192,
-        num_heads=3,
-        patch_size=16,
-        use_sta=True,
-        conv_inplane=16,
-        hidden_dim=None,
+            self,
+            name=None,
+            weights_path=None,
+            interaction_indexes=[],
+            finetune=True,
+            embed_dim=192,
+            num_heads=3,
+            patch_size=16,
+            use_sta=True,
+            conv_inplane=16,
+            hidden_dim=None,
     ):
-        super(DINOv3STAs, self).__init__()
+        super(CG_AFS_DINOv3STAs, self).__init__()
+
+        # 1. 加载 Backbone 逻辑
         if 'dinov3' in name:
             self.dinov3 = DinoVisionTransformer(name=name)
             if weights_path is not None and os.path.exists(weights_path):
-                print(f'Loading ckpt from {weights_path}...')
+                print(f'Loading DINOv3 ckpt from {weights_path}...')
                 self.dinov3.load_state_dict(torch.load(weights_path))
-            else:
-                print('Training DINOv3 from scratch...')
         else:
-            self.dinov3 =  VisionTransformer(embed_dim=embed_dim, num_heads=num_heads, return_layers=interaction_indexes)
+            self.dinov3 = VisionTransformer(embed_dim=embed_dim, num_heads=num_heads, return_layers=interaction_indexes)
             if weights_path is not None and os.path.exists(weights_path):
-                print(f'Loading ckpt from {weights_path}...')
+                print(f'Loading ViT-Tiny ckpt from {weights_path}...')
                 self.dinov3._model.load_state_dict(torch.load(weights_path))
-            else:
-                print('Training ViT-Tiny from scratch...')
 
-        embed_dim = self.dinov3.embed_dim
         self.interaction_indexes = interaction_indexes
         self.patch_size = patch_size
+        embed_dim = self.dinov3.embed_dim
 
         if not finetune:
             self.dinov3.eval()
             self.dinov3.requires_grad_(False)
 
-        # init the feature pyramid
+        # 2. 初始化 STA
         self.use_sta = use_sta
         if use_sta:
-            print(f"Using Lite Spatial Prior Module with inplanes={conv_inplane}")
             self.sta = SpatialPriorModulev2(inplanes=conv_inplane)
+            c2_in = embed_dim + conv_inplane * 2
+            c3_in = embed_dim + conv_inplane * 4
+            c4_in = embed_dim + conv_inplane * 4
         else:
-            conv_inplane = 0
+            c2_in = c3_in = c4_in = embed_dim
 
-        # linear projection
+        # 3. 投影层
         hidden_dim = hidden_dim if hidden_dim is not None else embed_dim
         self.convs = nn.ModuleList([
-            nn.Conv2d(embed_dim + conv_inplane*2, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Conv2d(embed_dim + conv_inplane*4, hidden_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            nn.Conv2d(c2_in, hidden_dim, kernel_size=1, bias=False),
+            nn.Conv2d(c3_in, hidden_dim, kernel_size=1, bias=False),
+            nn.Conv2d(c4_in, hidden_dim, kernel_size=1, bias=False)
         ])
-        # norm
         self.norms = nn.ModuleList([
             nn.SyncBatchNorm(hidden_dim),
             nn.SyncBatchNorm(hidden_dim),
@@ -131,41 +131,47 @@ class DINOv3STAs(nn.Module):
         ])
 
     def forward(self, x):
-        # Code for matching with oss
-        H_c, W_c = x.shape[2] // 16, x.shape[3] // 16
-        H_toks, W_toks = x.shape[2] // self.patch_size, x.shape[3] // self.patch_size
-        bs, C, h, w = x.shape
+        bs, _, h, w = x.shape
+        H_c, W_c = h // 16, w // 16
 
+        # 提取 ViT 特征
         if len(self.interaction_indexes) > 0 and not isinstance(self.dinov3, VisionTransformer):
-            all_layers = self.dinov3.get_intermediate_layers(
-                x, n=self.interaction_indexes, return_class_token=True
-            )
+            all_layers = self.dinov3.get_intermediate_layers(x, n=self.interaction_indexes, return_class_token=True)
         else:
             all_layers = self.dinov3(x)
 
-        if len(all_layers) == 1:    # repeat the same layer for all the three scales
-            all_layers = [all_layers[0], all_layers[0], all_layers[0]]
+        if len(all_layers) == 1:
+            all_layers = [all_layers[0]] * 3
 
         sem_feats = []
         num_scales = len(all_layers) - 2
-        for i, sem_feat in enumerate(all_layers):
-            feat, _ = sem_feat
-            sem_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()  # [B, D, H, W]
-            resize_H, resize_W = int(H_c * 2**(num_scales-i)), int(W_c * 2**(num_scales-i))
-            sem_feat = F.interpolate(sem_feat, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
-            sem_feats.append(sem_feat)
+        for i, (feat, _) in enumerate(all_layers):
+            s_feat = feat.transpose(1, 2).view(bs, -1, H_c, W_c).contiguous()
+            target_H, target_W = int(H_c * 2 ** (num_scales - i)), int(W_c * 2 ** (num_scales - i))
+            s_feat = F.interpolate(s_feat, size=[target_H, target_W], mode="bilinear", align_corners=False)
+            sem_feats.append(s_feat)
 
-        # fusion
-        fused_feats = []
         if self.use_sta:
             detail_feats = self.sta(x)
-            for sem_feat, detail_feat in zip(sem_feats, detail_feats):
-                fused_feats.append(torch.cat([sem_feat, detail_feat], dim=1))
-        else:
-            fused_feats = sem_feats
+            final_outs = []
+            for i, (sem, det) in enumerate(zip(sem_feats, detail_feats)):
+                # 改进：引入 Soft-Center Gating
+                # 相比 max 或 mean，使用自适应注意力权重能让大目标的特征更“纯”
+                # 计算通道注意力 (Squeeze-and-Excitation 思想)
+                avg_pool = torch.mean(sem, dim=(2, 3), keepdim=True)
+                channel_attn = torch.sigmoid(avg_pool)
+                sem = sem * channel_attn
 
-        c2 = self.norms[0](self.convs[0](fused_feats[0]))
-        c3 = self.norms[1](self.convs[1](fused_feats[1]))
-        c4 = self.norms[2](self.convs[2](fused_feats[2]))
+                # 空间门控保持聚焦
+                spatial_mask = torch.sigmoid(torch.mean(sem, dim=1, keepdim=True))
+                det_guided = det * spatial_mask
 
-        return c2, c3, c4
+                # 融合并洗牌
+                fused = torch.cat([sem, det_guided], dim=1)
+                fused = channel_shuffle(fused, groups=2)
+
+                out = self.norms[i](self.convs[i](fused))
+                final_outs.append(out)
+            return tuple(final_outs)
+
+        return [self.norms[i](self.convs[i](f)) for i, f in enumerate(sem_feats)]
