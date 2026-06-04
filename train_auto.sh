@@ -5,7 +5,7 @@ export OMP_NUM_THREADS=8
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 mkdir -p nohup_log
-LOGFILE=nohup_log/deimv2_dinov3_s_offtype_ABC_78_4_$(date +%Y%m%d_%H%M%S).log
+LOGFILE=nohup_log/s_offtype_baseline_78_$(date +%Y%m%d_%H%M%S).log
 
 TRAIN_EXIT_CODE=1
 
@@ -23,7 +23,7 @@ cleanup() {
 trap cleanup EXIT
 
 CUDA_VISIBLE_DEVICES=0 torchrun train.py \
-    -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_offtype_ABC.yml \
+    -c configs/deimv2/ablation_experiments/deimv2_dinov3_s_wheat_s78.yml \
     --use-amp --seed=0 2>&1 | tee "$LOGFILE"
 
 TRAIN_EXIT_CODE=${PIPESTATUS[0]}
