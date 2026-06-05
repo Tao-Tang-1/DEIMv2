@@ -330,6 +330,18 @@ class DEIMTransformer(nn.Module):
         self.dec_bbox_head = nn.ModuleList(
             [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
+        # shared_score_head = nn.Linear(hidden_dim, num_classes)
+        # shared_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max + 1), 3, act=mlp_act)
+        #
+        # self.dec_score_head = nn.ModuleList(
+        #     [shared_score_head] * (num_layers // 2) +
+        #     [copy.deepcopy(shared_score_head) for _ in range(num_layers - num_layers // 2)]
+        # )
+        #
+        # self.dec_bbox_head = nn.ModuleList(
+        #     [shared_bbox_head] * (num_layers // 2) +
+        #     [copy.deepcopy(shared_bbox_head) for _ in range(num_layers - num_layers // 2)]
+        # )
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -498,27 +510,81 @@ class DEIMTransformer(nn.Module):
 
         return content, enc_topk_bbox_unact, enc_topk_bboxes_list, enc_topk_logits_list
 
-    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
-        if self.query_select_method == 'default':
-            _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+    # def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
+    #     if self.query_select_method == 'default':
+    #         _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+    #
+    #     elif self.query_select_method == 'one2many':
+    #         _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
+    #         topk_ind = topk_ind // self.num_classes
+    #
+    #     elif self.query_select_method == 'agnostic':
+    #         _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
+    #
+    #     topk_ind: torch.Tensor
+    #
+    #     topk_anchors = outputs_anchors_unact.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
+    #
+    #     topk_logits = outputs_logits.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
+    #
+    #     topk_memory = memory.gather(dim=1, \
+    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+    #
+    #     return topk_memory, topk_logits, topk_anchors
 
-        elif self.query_select_method == 'one2many':
-            _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
-            topk_ind = topk_ind // self.num_classes
+    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
+                     topk: int):
+        # 1. 获取 sigmoid 后的值
+        # [B, N, 4] -> [cx, cy, w, h]
+        anchors_sigmoid = outputs_anchors_unact.sigmoid()
+        prob = outputs_logits.sigmoid()  # [B, N, Class]
 
-        elif self.query_select_method == 'agnostic':
-            _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
+        # 2. 尺度权重 (Scale Weight) - 针对大目标强化
+        wh = anchors_sigmoid[..., 2:]
+        area = wh[..., 0] * wh[..., 1]
+        # 0.4 次幂能让大框优势显著，同时不至于让小框彻底消失（保持泛化性）
+        scale_weight = torch.pow(area, 0.4)
 
-        topk_ind: torch.Tensor
+        # 3. 策略修正：如果你发现边缘目标丢了，可以注释掉下面这两行
+        # 计算 Query 距离图像中心的偏移，镇压边缘虚警
+        center_dist = torch.sqrt((anchors_sigmoid[..., 0] - 0.5) ** 2 + (anchors_sigmoid[..., 1] - 0.5) ** 2)
+        center_weight = torch.exp(-center_dist)
 
-        topk_anchors = outputs_anchors_unact.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
+        # 4. 融合得分
+        if self.query_select_method == 'agnostic':
+            # 类别无关模式
+            scores = prob.squeeze(-1) * scale_weight * center_weight
+        else:
+            # 正常模式：取最大类别概率 * 尺度权重 * 中心权重
+            scores = prob.max(-1).values * scale_weight * center_weight
 
-        topk_logits = outputs_logits.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
+        # 5. 执行 Top-K 筛选
+        # 确保 topk 不超过总数 N
+        topk = min(topk, scores.shape[1])
+        _, topk_ind = torch.topk(scores, topk, dim=-1)
 
-        topk_memory = memory.gather(dim=1, \
-            index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
+        # 6. Gather 采集 (加固维度对齐)
+        # 采集 Anchor
+        topk_anchors = outputs_anchors_unact.gather(
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_anchors_unact.shape[-1])
+        )
+
+        # 采集 Logits (仅训练时需要)
+        topk_logits = None
+        if self.training:
+            topk_logits = outputs_logits.gather(
+                dim=1,
+                index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1])
+            )
+
+        # 采集 Memory (Content Query)
+        topk_memory = memory.gather(
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, memory.shape[-1])
+        )
 
         return topk_memory, topk_logits, topk_anchors
 
