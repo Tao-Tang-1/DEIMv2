@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_offtype_SCD_QS2
+output_dir: ./outputs/ablation_experiments/deimv2_dinov3_s_offtype_SCD_QS3
 
 sync_bn: True
 find_unused_parameters: True

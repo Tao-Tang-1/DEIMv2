@@ -28,6 +28,32 @@ from .deim_utils import RMSNorm, SwiGLUFFN, Gate, MLP
 __all__ = ['DEIMTransformer']
 
 
+class ConfidenceCalibrator(nn.Module):
+    """
+    SCD_QS: Confidence Calibration with Residual Learning
+
+    学习一个小的调整量来校准置信度分数，
+    起始行为 ≈ baseline（adjustment ≈ 0），
+    训练后学习有用的修正。
+    """
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.calibrator = nn.Sequential(
+            nn.Linear(hidden_dim + 1, hidden_dim // 4),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 4, 1)
+        )
+        # 初始化最后一层 bias 为 0，确保起始 adjustment ≈ 0
+        init.zeros_(self.calibrator[-1].bias)
+        init.zeros_(self.calibrator[-1].weight)
+
+    def forward(self, memory, base_scores):
+        # memory: [B, N, C], base_scores: [B, N]
+        inp = torch.cat([memory, base_scores.unsqueeze(-1)], dim=-1)
+        adjustment = self.calibrator(inp).squeeze(-1)  # [B, N]
+        return base_scores + adjustment  # 残差学习
+
+
 class TransformerDecoderLayer(nn.Module):
     def __init__(self,
                  d_model=256,
@@ -315,6 +341,10 @@ class DEIMTransformer(nn.Module):
 
         self.query_pos_head = MLP(4, hidden_dim, hidden_dim, 3, act=mlp_act)
 
+        # SCD_QS: Confidence Calibration with Residual Learning
+        print(f"     --- Use SCD_QS (Confidence Calibration) ---")
+        self.confidence_calibrator = ConfidenceCalibrator(hidden_dim)
+
         # decoder head
         self.pre_bbox_head = MLP(hidden_dim, hidden_dim, 4, 3, act=mlp_act)
         self.integral = Integral(self.reg_max)
@@ -536,32 +566,17 @@ class DEIMTransformer(nn.Module):
 
     def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
                      topk: int):
-        # 1. 获取 sigmoid 后的值
-        # [B, N, 4] -> [cx, cy, w, h]
-        anchors_sigmoid = outputs_anchors_unact.sigmoid()
-        prob = outputs_logits.sigmoid()  # [B, N, Class]
-
-        # 2. 尺度权重 (Scale Weight) - 针对大目标强化
-        wh = anchors_sigmoid[..., 2:]
-        area = wh[..., 0] * wh[..., 1]
-        # 0.4 次幂能让大框优势显著，同时不至于让小框彻底消失（保持泛化性）
-        scale_weight = torch.pow(area, 0.4)
-
-        # 3. 策略修正：如果你发现边缘目标丢了，可以注释掉下面这两行
-        # 计算 Query 距离图像中心的偏移，镇压边缘虚警
-        center_dist = torch.sqrt((anchors_sigmoid[..., 0] - 0.5) ** 2 + (anchors_sigmoid[..., 1] - 0.5) ** 2)
-        center_weight = torch.exp(-center_dist)
-
-        # 4. 融合得分
+        # 1. 基础置信度分数（与 baseline 一致）
         if self.query_select_method == 'agnostic':
-            # 类别无关模式
-            scores = prob.squeeze(-1) * scale_weight * center_weight
+            base_scores = outputs_logits.sigmoid().squeeze(-1)
         else:
-            # 正常模式：取最大类别概率 * 尺度权重 * 中心权重
-            scores = prob.max(-1).values * scale_weight * center_weight
+            base_scores = outputs_logits.sigmoid().max(-1).values
 
-        # 5. 执行 Top-K 筛选
-        # 确保 topk 不超过总数 N
+        # 2. SCD_QS: Confidence Calibration（残差学习）
+        # 从 baseline 出发，学习一个小的调整量
+        scores = self.confidence_calibrator(memory, base_scores)
+
+        # 3. 执行 Top-K 筛选
         topk = min(topk, scores.shape[1])
         _, topk_ind = torch.topk(scores, topk, dim=-1)
 
