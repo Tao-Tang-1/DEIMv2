@@ -28,39 +28,6 @@ from .deim_utils import RMSNorm, SwiGLUFFN, Gate, MLP
 __all__ = ['DEIMTransformer']
 
 
-class SCD_QS(nn.Module):
-    """
-    SCD_QS: Score Calibration via Distance-aware Query Scoring
-
-    用可学习参数替换手调常数，保持零架构开销：
-    - scale_exponent: 控制面积权重的敏感度（手调值 0.4 → 可学习）
-    - center_temperature: 控制中心距离惩罚的衰减速率（手调值 1.0 → 可学习）
-
-    参数量: 2（两个标量）
-    """
-    def __init__(self):
-        super().__init__()
-        # 初始化为手调最优值附近
-        self.scale_exponent = nn.Parameter(torch.tensor([0.4]))
-        self.center_temperature = nn.Parameter(torch.tensor([1.0]))
-
-    def forward(self, anchors_sigmoid, prob):
-        # anchors_sigmoid: [B, N, 4], prob: [B, N, C]
-        wh = anchors_sigmoid[..., 2:]
-        area = wh[..., 0] * wh[..., 1]
-
-        # 可学习的面积权重
-        scale_weight = torch.pow(area.clamp(min=1e-6), self.scale_exponent)
-
-        # 可学习的中心距离惩罚
-        center_dist = torch.sqrt(
-            (anchors_sigmoid[..., 0] - 0.5) ** 2 + (anchors_sigmoid[..., 1] - 0.5) ** 2
-        )
-        center_weight = torch.exp(-self.center_temperature * center_dist)
-
-        return scale_weight * center_weight
-
-
 class TransformerDecoderLayer(nn.Module):
     def __init__(self,
                  d_model=256,
@@ -348,10 +315,6 @@ class DEIMTransformer(nn.Module):
 
         self.query_pos_head = MLP(4, hidden_dim, hidden_dim, 3, act=mlp_act)
 
-        # SCD_QS: 可学习的几何权重（替换手调常数，仅 2 个参数）
-        print(f"     --- Use SCD_QS (Learnable Geometric Scoring) ---")
-        self.scd_qs = SCD_QS()
-
         # decoder head
         self.pre_bbox_head = MLP(hidden_dim, hidden_dim, 4, 3, act=mlp_act)
         self.integral = Integral(self.reg_max)
@@ -367,18 +330,6 @@ class DEIMTransformer(nn.Module):
         self.dec_bbox_head = nn.ModuleList(
             [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=mlp_act) for _ in range(num_layers - self.eval_idx - 1)])
-        # shared_score_head = nn.Linear(hidden_dim, num_classes)
-        # shared_bbox_head = MLP(hidden_dim, hidden_dim, 4 * (self.reg_max + 1), 3, act=mlp_act)
-        #
-        # self.dec_score_head = nn.ModuleList(
-        #     [shared_score_head] * (num_layers // 2) +
-        #     [copy.deepcopy(shared_score_head) for _ in range(num_layers - num_layers // 2)]
-        # )
-        #
-        # self.dec_bbox_head = nn.ModuleList(
-        #     [shared_bbox_head] * (num_layers // 2) +
-        #     [copy.deepcopy(shared_bbox_head) for _ in range(num_layers - num_layers // 2)]
-        # )
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -547,70 +498,27 @@ class DEIMTransformer(nn.Module):
 
         return content, enc_topk_bbox_unact, enc_topk_bboxes_list, enc_topk_logits_list
 
-    # def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
-    #     if self.query_select_method == 'default':
-    #         _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
-    #
-    #     elif self.query_select_method == 'one2many':
-    #         _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
-    #         topk_ind = topk_ind // self.num_classes
-    #
-    #     elif self.query_select_method == 'agnostic':
-    #         _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
-    #
-    #     topk_ind: torch.Tensor
-    #
-    #     topk_anchors = outputs_anchors_unact.gather(dim=1, \
-    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
-    #
-    #     topk_logits = outputs_logits.gather(dim=1, \
-    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
-    #
-    #     topk_memory = memory.gather(dim=1, \
-    #         index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
-    #
-    #     return topk_memory, topk_logits, topk_anchors
+    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor, topk: int):
+        if self.query_select_method == 'default':
+            _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
 
-    def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
-                     topk: int):
-        # 1. 获取 sigmoid 后的值
-        anchors_sigmoid = outputs_anchors_unact.sigmoid()
-        prob = outputs_logits.sigmoid()  # [B, N, Class]
+        elif self.query_select_method == 'one2many':
+            _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
+            topk_ind = topk_ind // self.num_classes
 
-        # 2. SCD_QS: 可学习的几何权重（替换手调常数 0.4 和 1.0）
-        geo_weight = self.scd_qs(anchors_sigmoid, prob)  # [B, N]
+        elif self.query_select_method == 'agnostic':
+            _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
 
-        # 3. 融合得分
-        if self.query_select_method == 'agnostic':
-            scores = prob.squeeze(-1) * geo_weight
-        else:
-            scores = prob.max(-1).values * geo_weight
+        topk_ind: torch.Tensor
 
-        # 5. 执行 Top-K 筛选
-        # 确保 topk 不超过总数 N
-        topk = min(topk, scores.shape[1])
-        _, topk_ind = torch.topk(scores, topk, dim=-1)
+        topk_anchors = outputs_anchors_unact.gather(dim=1, \
+            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_anchors_unact.shape[-1]))
 
-        # 6. Gather 采集 (加固维度对齐)
-        # 采集 Anchor
-        topk_anchors = outputs_anchors_unact.gather(
-            dim=1,
-            index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_anchors_unact.shape[-1])
-        )
+        topk_logits = outputs_logits.gather(dim=1, \
+            index=topk_ind.unsqueeze(-1).repeat(1, 1, outputs_logits.shape[-1])) if self.training else None
 
-        # 采集 Logits (仅训练时需要)
-        topk_logits = None
-        if self.training:
-            topk_logits = outputs_logits.gather(
-                dim=1,
-                index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1])
-            )
-
-        # 采集 Memory (Content Query)
-        topk_memory = memory.gather(
-            dim=1,
-            index=topk_ind.unsqueeze(-1).expand(-1, -1, memory.shape[-1])
-        )
+        topk_memory = memory.gather(dim=1, \
+            index=topk_ind.unsqueeze(-1).repeat(1, 1, memory.shape[-1]))
 
         return topk_memory, topk_logits, topk_anchors
 
