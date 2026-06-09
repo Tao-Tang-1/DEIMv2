@@ -5,7 +5,7 @@ export OMP_NUM_THREADS=8
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 mkdir -p nohup_log
-LOGFILE=nohup_log/s_offtype_MAL_ASL_$(date +%Y%m%d_%H%M%S).log
+LOGFILE=nohup_log/s_offtype_SCQ_QS4_$(date +%Y%m%d_%H%M%S).log
 
 TRAIN_EXIT_CODE=1
 
