@@ -28,35 +28,37 @@ from .deim_utils import RMSNorm, SwiGLUFFN, Gate, MLP
 __all__ = ['DEIMTransformer']
 
 
-class ConfidenceCalibrator(nn.Module):
+class SCD_QS(nn.Module):
     """
-    SCD_QS: Spatial-Aware Confidence Calibration with Residual Learning
+    SCD_QS: Score Calibration via Distance-aware Query Scoring
 
-    输入: memory [B,N,C], base_scores [B,N], anchors [B,N,4]
-    输出: 校准后的 scores [B,N]
+    用可学习参数替换手调常数，保持零架构开销：
+    - scale_exponent: 控制面积权重的敏感度（手调值 0.4 → 可学习）
+    - center_temperature: 控制中心距离惩罚的衰减速率（手调值 1.0 → 可学习）
 
-    设计原则:
-    - 起始行为 ≈ baseline（adjustment ≈ 0，因为最后一层权重初始化为 0）
-    - 加入 anchor 坐标，学习空间先验（边缘预测不可靠等）
-    - 轻量设计，参数增加极少
+    参数量: 2（两个标量）
     """
-    def __init__(self, hidden_dim):
+    def __init__(self):
         super().__init__()
-        # 输入: memory(C) + score(1) + anchors(4) = C + 5
-        self.calibrator = nn.Sequential(
-            nn.Linear(hidden_dim + 5, hidden_dim // 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim // 4, 1)
-        )
-        # 初始化最后一层为 0，确保起始 adjustment ≈ 0
-        init.zeros_(self.calibrator[-1].bias)
-        init.zeros_(self.calibrator[-1].weight)
+        # 初始化为手调最优值附近
+        self.scale_exponent = nn.Parameter(torch.tensor([0.4]))
+        self.center_temperature = nn.Parameter(torch.tensor([1.0]))
 
-    def forward(self, memory, base_scores, anchors):
-        # memory: [B, N, C], base_scores: [B, N], anchors: [B, N, 4]
-        inp = torch.cat([memory, base_scores.unsqueeze(-1), anchors], dim=-1)
-        adjustment = self.calibrator(inp).squeeze(-1)  # [B, N]
-        return base_scores + adjustment  # 残差学习
+    def forward(self, anchors_sigmoid, prob):
+        # anchors_sigmoid: [B, N, 4], prob: [B, N, C]
+        wh = anchors_sigmoid[..., 2:]
+        area = wh[..., 0] * wh[..., 1]
+
+        # 可学习的面积权重
+        scale_weight = torch.pow(area.clamp(min=1e-6), self.scale_exponent)
+
+        # 可学习的中心距离惩罚
+        center_dist = torch.sqrt(
+            (anchors_sigmoid[..., 0] - 0.5) ** 2 + (anchors_sigmoid[..., 1] - 0.5) ** 2
+        )
+        center_weight = torch.exp(-self.center_temperature * center_dist)
+
+        return scale_weight * center_weight
 
 
 class TransformerDecoderLayer(nn.Module):
@@ -346,9 +348,9 @@ class DEIMTransformer(nn.Module):
 
         self.query_pos_head = MLP(4, hidden_dim, hidden_dim, 3, act=mlp_act)
 
-        # SCD_QS: Confidence Calibration with Residual Learning
-        print(f"     --- Use SCD_QS (Confidence Calibration) ---")
-        self.confidence_calibrator = ConfidenceCalibrator(hidden_dim)
+        # SCD_QS: 可学习的几何权重（替换手调常数，仅 2 个参数）
+        print(f"     --- Use SCD_QS (Learnable Geometric Scoring) ---")
+        self.scd_qs = SCD_QS()
 
         # decoder head
         self.pre_bbox_head = MLP(hidden_dim, hidden_dim, 4, 3, act=mlp_act)
@@ -571,17 +573,21 @@ class DEIMTransformer(nn.Module):
 
     def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
                      topk: int):
-        # 1. 基础置信度分数（与 baseline 一致）
+        # 1. 获取 sigmoid 后的值
+        anchors_sigmoid = outputs_anchors_unact.sigmoid()
+        prob = outputs_logits.sigmoid()  # [B, N, Class]
+
+        # 2. SCD_QS: 可学习的几何权重（替换手调常数 0.4 和 1.0）
+        geo_weight = self.scd_qs(anchors_sigmoid, prob)  # [B, N]
+
+        # 3. 融合得分
         if self.query_select_method == 'agnostic':
-            base_scores = outputs_logits.sigmoid().squeeze(-1)
+            scores = prob.squeeze(-1) * geo_weight
         else:
-            base_scores = outputs_logits.sigmoid().max(-1).values
+            scores = prob.max(-1).values * geo_weight
 
-        # 2. SCD_QS: Spatial-Aware Confidence Calibration（残差学习）
-        # 输入 anchor 坐标，学习空间先验
-        scores = self.confidence_calibrator(memory, base_scores, outputs_anchors_unact.sigmoid())
-
-        # 3. 执行 Top-K 筛选
+        # 5. 执行 Top-K 筛选
+        # 确保 topk 不超过总数 N
         topk = min(topk, scores.shape[1])
         _, topk_ind = torch.topk(scores, topk, dim=-1)
 
