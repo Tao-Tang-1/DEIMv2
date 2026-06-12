@@ -186,7 +186,6 @@ class DEIMCriterion(nn.Module):
         if values is None:
             src_boxes = outputs['pred_boxes'][idx]
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            # 建议此处确保使用的是 xyxy 格式计算 IoU
             ious, _ = box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes))
             ious = torch.diag(ious).detach()
         else:
@@ -199,21 +198,20 @@ class DEIMCriterion(nn.Module):
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
-        # 转换为 one-hot，去掉背景类（最后一列）
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
 
-        # 3. 策略 1: 更加丝滑的标签平滑 (Sigmoid 映射)
-        # 强制拉开正负样本差距：IoU > 0.6 的给高分，IoU < 0.5 的给极低分
+        # 3. 线性标签映射（替代陡峭 sigmoid）
+        # 保留 IoU 的连续梯度信息：IoU=0.4 → target=0.4，IoU=0.8 → target=0.8
+        # 下限 clamp 到 0.3，确保低 IoU 正样本仍有有效的正向梯度信号
         target_score_o = torch.zeros_like(target_classes, dtype=src_logits.dtype)
-        boosted_ious = torch.sigmoid(15 * (ious.to(src_logits.dtype) - 0.6))
-        target_score_o[idx] = boosted_ious
+        smoothed_ious = ious.to(src_logits.dtype).clamp(min=0.3, max=1.0)
+        target_score_o[idx] = smoothed_ious
         target_score = target_score_o.unsqueeze(-1) * target
 
-        # 4. 策略 2: 动态负样本抑制 (Dynamic Background Suppression)
+        # 4. 自适应负样本抑制
         pred_score = F.sigmoid(src_logits).detach()
         if self.mal_alpha is not None:
-            # 对背景 (1 - target) 部分施加 1.5 倍惩罚，强行压制虚警
-            weight = (self.mal_alpha * 1.5) * pred_score.pow(self.gamma) * (1 - target) + target
+            weight = self.mal_alpha * pred_score.pow(self.gamma) * (1 - target) + target
         else:
             weight = pred_score.pow(self.gamma) * (1 - target) + target
 
