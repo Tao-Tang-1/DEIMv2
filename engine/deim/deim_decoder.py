@@ -506,10 +506,10 @@ class DEIMTransformer(nn.Module):
         anchors_sigmoid = outputs_anchors_unact.sigmoid()
         prob = outputs_logits.sigmoid()  # [B, N, Class]
 
-        # 尺度偏置：加法 bonus，大目标加分但小目标不归零
+        # 尺度偏置：sqrt(area) ∈ [0,1]，只加分不减分，大目标温和优先
         wh = anchors_sigmoid[..., 2:]
         area = wh[..., 0] * wh[..., 1]
-        scale_bias = self.scd_qs_alpha * torch.log(area.clamp(min=1e-4))
+        scale_bias = self.scd_qs_alpha * torch.sqrt(area)
 
         if self.query_select_method == 'agnostic':
             scores = prob.squeeze(-1) + scale_bias
