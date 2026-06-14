@@ -252,7 +252,6 @@ class DEIMTransformer(nn.Module):
                  use_gateway=True,
                  share_bbox_head=False,
                  share_score_head=False,
-                 scd_qs_alpha=0.05,
                  ):
         super().__init__()
         assert len(feat_channels) <= num_levels
@@ -278,12 +277,10 @@ class DEIMTransformer(nn.Module):
         assert cross_attn_method in ('default', 'discrete'), ''
         self.cross_attn_method = cross_attn_method
         self.query_select_method = query_select_method
-        self.scd_qs_alpha = scd_qs_alpha
         # -- print the parameters
         print(f"     --- Use Gateway@{use_gateway} ---")
         print(f"     --- Use Share Bbox Head@{share_bbox_head} ---")
         print(f"     --- Use Share Score Head@{share_score_head} ---")
-        print(f"     --- SCD_QS Alpha@{scd_qs_alpha} ---")
 
         # backbone feature projection
         self._build_input_proj_layer(feat_channels)
@@ -493,6 +490,10 @@ class DEIMTransformer(nn.Module):
         else:
             content = enc_topk_memory.detach()
 
+        # SCD_QS: scale-aware cross-scale content mixup (training only, no parameters)
+        if self.training:
+            content = self._scale_content_mixup(content, enc_topk_anchors)
+
         enc_topk_bbox_unact = enc_topk_bbox_unact.detach()
 
         if denoising_bbox_unact is not None:
@@ -503,33 +504,23 @@ class DEIMTransformer(nn.Module):
 
     def _select_topk(self, memory: torch.Tensor, outputs_logits: torch.Tensor, outputs_anchors_unact: torch.Tensor,
                      topk: int):
-        anchors_sigmoid = outputs_anchors_unact.sigmoid()
-        prob = outputs_logits.sigmoid()  # [B, N, Class]
-
-        # 尺度偏置：sqrt(area) ∈ [0,1]，只加分不减分，大目标温和优先
-        wh = anchors_sigmoid[..., 2:]
-        area = wh[..., 0] * wh[..., 1]
-        scale_bias = self.scd_qs_alpha * torch.sqrt(area)
-
-        if self.query_select_method == 'agnostic':
-            scores = prob.squeeze(-1) + scale_bias
-        else:
-            scores = prob.max(-1).values + scale_bias
-
-        topk = min(topk, scores.shape[1])
-        _, topk_ind = torch.topk(scores, topk, dim=-1)
+        if self.query_select_method == 'default':
+            _, topk_ind = torch.topk(outputs_logits.max(-1).values, topk, dim=-1)
+        elif self.query_select_method == 'one2many':
+            _, topk_ind = torch.topk(outputs_logits.flatten(1), topk, dim=-1)
+            topk_ind = topk_ind // self.num_classes
+        elif self.query_select_method == 'agnostic':
+            _, topk_ind = torch.topk(outputs_logits.squeeze(-1), topk, dim=-1)
 
         topk_anchors = outputs_anchors_unact.gather(
             dim=1,
             index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_anchors_unact.shape[-1])
         )
 
-        topk_logits = None
-        if self.training:
-            topk_logits = outputs_logits.gather(
-                dim=1,
-                index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1])
-            )
+        topk_logits = outputs_logits.gather(
+            dim=1,
+            index=topk_ind.unsqueeze(-1).expand(-1, -1, outputs_logits.shape[-1])
+        ) if self.training else None
 
         topk_memory = memory.gather(
             dim=1,
@@ -537,6 +528,26 @@ class DEIMTransformer(nn.Module):
         )
 
         return topk_memory, topk_logits, topk_anchors
+
+    @torch.no_grad()
+    def _scale_content_mixup(self, content, anchors_unact):
+        """SCD_QS: blend each query's content with a partner at a different scale.
+        Forces the decoder to rely on cross-attention rather than memorising scale-specific
+        content patterns. Parameter-free, active only during training.
+        """
+        anchors_sigmoid = anchors_unact.sigmoid()
+        area = anchors_sigmoid[..., 2] * anchors_sigmoid[..., 3]  # [B, N]
+        median_area = area.median(dim=-1, keepdim=True).values
+        is_large = (area > median_area)  # [B, N]
+
+        N = content.shape[1]
+        idx = torch.arange(N, device=content.device)
+        # cyclic shift: guarantees each query is paired with a DIFFERENT index
+        partner = torch.where(is_large, (idx + 1) % N, (idx - 1) % N)  # [B, N]
+
+        partner_content = content.gather(1, partner.unsqueeze(-1).expand_as(content))
+        alpha = 0.2
+        return (1 - alpha) * content + alpha * partner_content
 
     def forward(self, feats, targets=None):
         # input projection and embedding
