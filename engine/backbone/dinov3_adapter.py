@@ -92,12 +92,26 @@ class CG_AFS_DINOv3STAs(nn.Module):
             self.dinov3 = DinoVisionTransformer(name=name)
             if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading DINOv3 ckpt from {weights_path}...')
-                self.dinov3.load_state_dict(torch.load(weights_path))
+                try:
+                    ckpt = torch.load(weights_path, map_location='cpu', weights_only=False)
+                    state_dict = self._extract_state_dict(ckpt)
+                    msg = self.dinov3.load_state_dict(state_dict, strict=False)
+                    if msg.missing_keys or msg.unexpected_keys:
+                        print(f'  [WARN] missing: {msg.missing_keys[:5]}..., unexpected: {msg.unexpected_keys[:5]}...')
+                except Exception as e:
+                    print(f'  [WARN] Failed to load DINOv3 weights: {e}. Training from scratch.')
         else:
             self.dinov3 = VisionTransformer(embed_dim=embed_dim, num_heads=num_heads, return_layers=interaction_indexes)
             if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading ViT-Tiny ckpt from {weights_path}...')
-                self.dinov3._model.load_state_dict(torch.load(weights_path))
+                try:
+                    ckpt = torch.load(weights_path, map_location='cpu', weights_only=False)
+                    state_dict = self._extract_state_dict(ckpt)
+                    msg = self.dinov3._model.load_state_dict(state_dict, strict=False)
+                    if msg.missing_keys or msg.unexpected_keys:
+                        print(f'  [WARN] missing: {msg.missing_keys[:5]}..., unexpected: {msg.unexpected_keys[:5]}...')
+                except Exception as e:
+                    print(f'  [WARN] Failed to load ViT-Tiny weights: {e}. Training from scratch.')
 
         self.interaction_indexes = interaction_indexes
         self.patch_size = patch_size
@@ -129,6 +143,17 @@ class CG_AFS_DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim),
             nn.SyncBatchNorm(hidden_dim)
         ])
+
+    @staticmethod
+    def _extract_state_dict(ckpt):
+        if isinstance(ckpt, dict):
+            for key in ('state_dict', 'model', 'ema'):
+                if key in ckpt and isinstance(ckpt[key], dict):
+                    return ckpt[key]
+            return ckpt
+        if isinstance(ckpt, (tuple, list)):
+            return ckpt[0]
+        return ckpt
 
     def forward(self, x):
         bs, _, h, w = x.shape

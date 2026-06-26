@@ -45,10 +45,25 @@ train_dataloader:
   drop_last: True
 
   dataset:
-    type: CocoDetection
-    img_folder: /root/autodl-tmp/dataset/tiles/train/images
-    ann_file: /root/autodl-tmp/dataset/tiles/annotations/annotations_train.json
-    return_masks: False
+    type: SemiCocoDetection
+    img_folder:
+      - /root/autodl-tmp/dataset/tiles/train/images
+      - /root/autodl-tmp/pseudo/images
+    ann_file:
+      - /root/autodl-tmp/dataset/tiles/annotations/annotations_train.json
+      - /root/autodl-tmp/pseudo/annotations/annotations_train.json
+    source:
+      - 0
+      - 1
+    conf_threshold: 0.6
+    # Only apply to pseudo dataset (source=1). GT dataset is unaffected.
+    # Switch txt file for different annotation ratio experiments:
+    #   AutoX_10percent_train.txt   -> 10% pseudo labels
+    #   AutoX_20percent_train.txt   -> 20% pseudo labels
+    #   AutoX_50percent_train.txt   -> 50% pseudo labels
+    #   AutoX_80percent_train.txt   -> 80% pseudo labels
+    #   AutoX_100percent_train.txt  -> 100% pseudo labels
+    sample_list_file: /root/autodl-tmp/pseudo/split_txt/AutoX_10percent_train.txt
     transforms:
       type: Compose
       ops:
