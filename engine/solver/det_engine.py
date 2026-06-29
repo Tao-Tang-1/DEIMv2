@@ -123,23 +123,41 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
 
 
 def _slice_outputs(outputs, indices):
-    """Slice model outputs by batch indices for semi-supervised loss computation."""
+    """Slice model outputs by batch indices for semi-supervised loss computation.
+
+    All output tensors are batch-first [B, queries, ...], sliced at dim=0.
+    """
     if not indices:
         return None
+    idx = torch.tensor(indices, device=outputs['pred_logits'].device)
     sliced = {}
     for k, v in outputs.items():
-        if isinstance(v, torch.Tensor) and v.dim() >= 1 and v.shape[0] == outputs['pred_logits'].shape[0]:
-            sliced[k] = v[indices]
+        if k == 'dn_meta' and isinstance(v, dict):
+            dn_positive_idx = v['dn_positive_idx']
+            sliced[k] = {
+                'dn_positive_idx': tuple(dn_positive_idx[j] for j in indices),
+                'dn_num_group': v['dn_num_group'],
+            }
+        elif k == 'dn_pre_outputs' and isinstance(v, dict):
+            sliced[k] = {
+                ik: iv[idx] if isinstance(iv, torch.Tensor) and iv.shape[0] == outputs['pred_logits'].shape[0] else iv
+                for ik, iv in v.items()
+            }
+        elif isinstance(v, torch.Tensor) and v.dim() >= 1 and v.shape[0] == outputs['pred_logits'].shape[0]:
+            sliced[k] = v[idx]
         elif isinstance(v, list):
-            # Handle aux_outputs, enc_aux_outputs, dn_outputs etc.
             sliced[k] = []
             for item in v:
                 if isinstance(item, dict):
-                    sliced[k].append(_slice_outputs(item, indices))
+                    sliced_item = {}
+                    for ik, iv in item.items():
+                        if isinstance(iv, torch.Tensor) and iv.dim() >= 2 and iv.shape[0] == outputs['pred_logits'].shape[0]:
+                            sliced_item[ik] = iv[idx]
+                        else:
+                            sliced_item[ik] = iv
+                    sliced[k].append(sliced_item)
                 else:
                     sliced[k].append(item)
-        elif isinstance(v, dict):
-            sliced[k] = v  # metadata dicts (dn_meta, enc_meta) — shared
         else:
             sliced[k] = v
     return sliced

@@ -25,7 +25,11 @@ clip_max_norm: 0.1
 # -------------------------
 # Dataset / evaluator
 # -------------------------
-task: detection
+task: semi_detection
+
+semi:
+  unsup_weight: 0.5
+
 
 evaluator:
   type: CocoEvaluator
@@ -55,7 +59,7 @@ train_dataloader:
     source:
       - 0
       - 1
-    conf_threshold: 0.6
+    conf_threshold: 0.8
     # Only apply to pseudo dataset (source=1). GT dataset is unaffected.
     # Switch txt file for different annotation ratio experiments:
     #   AutoX_10percent_train.txt   -> 10% pseudo labels
