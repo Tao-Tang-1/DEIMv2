@@ -4,8 +4,8 @@ set -o pipefail
 export OMP_NUM_THREADS=8
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-mkdir -p nohup_log
-LOGFILE=nohup_log/s_offtype_CSM_10%_$(date +%Y%m%d_%H%M%S).log
+mkdir -p nohup_pseudo_log
+LOGFILE=nohup_pseudo_log/s_offtype_CSM_all50%_$(date +%Y%m%d_%H%M%S).log
 
 TRAIN_EXIT_CODE=1
 

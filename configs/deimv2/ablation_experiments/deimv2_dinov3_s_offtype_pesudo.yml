@@ -2,7 +2,7 @@
 # Runtime / global
 # -------------------------
 print_freq: 500
-output_dir: ./outputs/pseudo/deimv2_dinov3_s_offtype_CSM_10%
+output_dir: ./outputs/pseudo/deimv2_dinov3_s_offtype_CSM_all50%
 
 sync_bn: True
 find_unused_parameters: True
@@ -60,14 +60,23 @@ train_dataloader:
       - 0
       - 1
     conf_threshold: 0.8
-    # Only apply to pseudo dataset (source=1). GT dataset is unaffected.
-    # Switch txt file for different annotation ratio experiments:
-    #   AutoX_10percent_train.txt   -> 10% pseudo labels
-    #   AutoX_20percent_train.txt   -> 20% pseudo labels
-    #   AutoX_50percent_train.txt   -> 50% pseudo labels
-    #   AutoX_80percent_train.txt   -> 80% pseudo labels
-    #   AutoX_100percent_train.txt  -> 100% pseudo labels
-    sample_list_file: /root/autodl-tmp/pseudo/split_txt/AutoX_10percent_train.txt
+    # List format: [GT filter (source=0), pseudo filter (source=1)]
+    # null = no filter (use all images)
+    #
+    # Semi-supervised experiments (GT subset + all pseudo):
+    #   10% GT:  /root/autodl-tmp/pseudo/split_txt/gt_10percent_train.txt
+    #   20% GT:  /root/autodl-tmp/pseudo/split_txt/gt_20percent_train.txt
+    #   50% GT:  /root/autodl-tmp/pseudo/split_txt/gt_50percent_train.txt
+    #   100% GT: null
+    #
+    # Supervised-only baseline: change task to 'detection' and use single string
+    #   sample_list_file: /root/autodl-tmp/pseudo/split_txt/gt_10percent_train.txt
+    sample_list_file:
+      - /root/autodl-tmp/pseudo/split_txt/gt_50percent_train.txt
+      - /root/autodl-tmp/pseudo/split_txt/AutoX_50percent_train.txt
+#    sample_list_file:
+#      - null
+#      - /root/autodl-tmp/pseudo/split_txt/AutoX_50percent_train.txt
     transforms:
       type: Compose
       ops:
